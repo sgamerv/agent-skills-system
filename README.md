@@ -17,16 +17,17 @@ agent-skills-system/
 │   ├── docker-compose.yml # Docker 配置
 │   ├── requirements.txt   # Python 依赖
 │   └── pyproject.toml    # 项目配置
-├── frontend/              # 前端应用 (Vue 3)
-│   ├── src/
-│   │   ├── views/        # 页面组件
-│   │   ├── components/   # 公共组件
-│   │   ├── stores/       # 状态管理
-│   │   ├── router/       # 路由配置
-│   │   └── assets/       # 静态资源
-│   ├── package.json      # 前端依赖
-│   └── vite.config.js    # Vite 配置
-└── README.md             # 项目说明
+├── frontend/              # 前端应用 (Nuxt 3 + Nuxt UI)
+│   ├── pages/             # 页面组件（自动路由）
+│   ├── components/        # 公共组件（自动导入）
+│   ├── layouts/           # 布局组件
+│   ├── composables/       # 组合式函数（自动导入）
+│   ├── assets/            # 静态资源
+│   ├── app.vue            # 根组件
+│   ├── nuxt.config.ts     # Nuxt 配置
+│   ├── package.json       # 前端依赖
+│   └── README.md          # 前端文档
+└── README.md              # 项目说明
 ```
 
 ## 技术栈
@@ -39,12 +40,10 @@ agent-skills-system/
 - **容器**: Docker & Docker Compose
 
 ### 前端
-- **框架**: Vue 3 (Composition API)
-- **构建工具**: Vite
-- **路由**: Vue Router
-- **状态管理**: Pinia
-- **HTTP 客户端**: Axios
-- **工具库**: @vueuse/core
+- **框架**: Nuxt 3 (基于 Vue 3)
+- **UI 组件库**: Nuxt UI (@nuxt/ui)
+- **语言**: TypeScript
+- **特性**: SSR、自动路由、自动导入、HMR、深色模式
 
 ## 快速开始
 
