@@ -1,7 +1,6 @@
 """FastAPI 应用主入口"""
 from __future__ import annotations
 
-import logging
 import uvicorn
 from typing import Any, Dict, List, Optional
 
@@ -10,12 +9,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from backend.config import settings
+from backend.config.logging_config import get_logger, setup_logging
 from backend.core.agent_runtime import AgentRuntime
 from backend.core.memory import ProfileManager
 from backend.core.session_manager import MessageManager, SessionManager
 
+# 配置全局日志
+setup_logging(level=settings.LOG_LEVEL_INT)
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # 创建 FastAPI 应用
 app = FastAPI(

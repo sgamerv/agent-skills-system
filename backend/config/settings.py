@@ -18,7 +18,19 @@ class Settings(BaseSettings):
     APP_NAME: str = "Agent Skills System"
     APP_VERSION: str = "1.0.0"
     DEBUG: bool = True
-    LOG_LEVEL: str = "INFO"
+    LOG_LEVEL: str = "DEBUG"
+
+    @property
+    def LOG_LEVEL_INT(self) -> int:
+        """获取日志级别的整数值"""
+        level_map = {
+            "DEBUG": logging.DEBUG,
+            "INFO": logging.INFO,
+            "WARNING": logging.WARNING,
+            "ERROR": logging.ERROR,
+            "CRITICAL": logging.CRITICAL,
+        }
+        return level_map.get(self.LOG_LEVEL.upper(), logging.INFO)
 
     # Xinference 配置
     XINFERENCE_URL: str = "http://localhost:9997"
@@ -45,7 +57,7 @@ class Settings(BaseSettings):
     MAX_UPLOAD_SIZE: int = 104857600  # 100MB
 
     # Skills 目录
-    SKILLS_DIR: str = "./skills"
+    SKILLS_DIR: str = "./backend/skills"
 
     model_config = {
         "env_file": ".env",

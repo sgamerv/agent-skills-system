@@ -34,7 +34,7 @@ if lsof -Pi :8000 -sTCP:LISTEN -t >/dev/null 2>&1; then
     echo "   ✓ 后端已在端口 8000 运行"
 else
     echo "   → 启动后端服务..."
-    PYTHONPATH="$SCRIPT_DIR" python -m uvicorn backend.api.main:app --reload --host 0.0.0.0 --port 8000 > /tmp/backend.log 2>&1 &
+    PYTHONPATH="$SCRIPT_DIR" python3 -m uvicorn backend.api.main:app --reload --host 0.0.0.0 --port 8000 > /tmp/backend.log 2>&1 &
     BACKEND_PID=$!
     sleep 2
     if lsof -Pi :8000 -sTCP:LISTEN -t >/dev/null 2>&1; then
