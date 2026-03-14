@@ -176,6 +176,339 @@ python test_system.py
 
 打开浏览器访问: http://localhost:8000/docs
 
+## Chat 处理流程
+
+系统提供完整的五步 Chat 处理流程，确保用户获得最佳体验：
+
+### 第一步：技能匹配与推荐
+
+**目标**: 通过用户输入，智能匹配可用的技能，并向用户说明匹配原因。
+
+**处理流程**:
+1. 分析用户输入的意图和关键词
+2. 在技能注册表中搜索匹配的技能
+3. 组织语言向用户说明：
+   - 为什么推荐这些技能
+   - 每个技能的功能描述
+   - 可用技能列表（支持多个候选技能）
+4. **兜底处理**：如果没有匹配到任何技能
+   - 告知用户当前系统无法处理该请求
+   - 建议联系人工客服或提供其他帮助方式
+
+**示例响应**:
+```json
+{
+  "response": "根据您的描述，我为您找到了以下技能：\n\n1. data-analysis - 数据分析功能，支持 CSV/Excel 数据处理和统计分析\n2. knowledge-qa - 专业知识问答功能，支持基于 RAG 的文档检索和智能回答\n\n请选择您想使用的技能，或输入"无匹配"转人工处理。",
+  "available_skills": [
+    {"name": "data-analysis", "description": "数据分析功能..."},
+    {"name": "knowledge-qa", "description": "知识问答功能..."}
+  ],
+  "state": "skill_selection",
+  "next_action": "user_select_skill"
+}
+```
+
+### 第二步：参数收集与确认
+
+**目标**: 当用户确认使用某个技能后，通过多轮对话收集执行所需的参数。
+
+**处理流程**:
+1. 用户确认选择某个技能
+2. 系统检查该技能的 Slot 定义（必需参数和可选参数）
+3. 按照优先级顺序逐个收集参数：
+   - 根据描述和验证规则询问用户
+   - 支持用户跳过可选参数
+   - 提供默认值建议
+4. 参数验证：
+   - 类型验证（文件、字符串、枚举等）
+   - 格式验证（文件扩展名、长度限制等）
+   - 依赖验证（某些参数可能依赖其他参数）
+5. **确认阶段**：所有必需参数收集完成后
+   - 向用户展示所有参数的摘要
+   - 询问用户是否确认执行
+   - 支持用户修改参数
+
+**示例响应**:
+```json
+{
+  "response": "好的，我将使用 data-analysis 技能帮您分析数据。\n\n请提供需要分析的数据文件路径（支持 CSV/Excel 格式）：",
+  "current_slot": {
+    "name": "data_file",
+    "type": "file",
+    "required": true,
+    "description": "需要分析的数据文件(CSV/Excel格式)",
+    "prompt": "请提供需要分析的数据文件路径",
+    "validation": {"file_extension": [".csv", ".xlsx", ".xls"], "max_size": "100MB"}
+  },
+  "state": "collecting_parameters",
+  "next_action": "provide_parameter"
+}
+```
+
+**确认阶段响应**:
+```json
+{
+  "response": "参数已收集完成，请确认：\n\n- 数据文件: /path/to/data.csv\n- 分析类型: descriptive\n- 目标列: sales\n- 输出格式: json\n\n是否确认执行？（输入"确认"开始执行，或"修改"调整参数）",
+  "collected_parameters": {
+    "data_file": "/path/to/data.csv",
+    "analysis_type": "descriptive",
+    "target_column": "sales",
+    "output_format": "json"
+  },
+  "state": "awaiting_confirmation",
+  "next_action": "confirm_or_modify"
+}
+```
+
+### 第三步：技能执行与结果返回
+
+**目标**: 执行技能，并根据执行时间选择合适的返回方式。
+
+**处理流程**:
+1. 用户确认后，开始执行技能
+2. **快速执行**（预期 < 5 秒）：
+   - 等待执行完成
+   - 直接返回完整结果给用户
+   - 包含执行结果的详细信息
+3. **长时间执行**（预期 > 5 秒）：
+   - 立即返回执行开始的消息
+   - 提供任务 ID 或进度查询方式
+   - 告知用户如何获取执行结果：
+     - 通过轮询接口查询状态
+     - 通过 WebSocket 接收实时进度
+     - 通过通知方式收到完成提醒
+
+**快速执行响应**:
+```json
+{
+  "response": "✅ 数据分析已完成！\n\n分析结果：\n- 数据行数: 1000\n- 列数: 5\n- 均值: 45.6\n- 标准差: 12.3\n- 中位数: 44.5\n\n请对结果进行评价，或继续使用其他功能。",
+  "execution_result": {
+    "success": true,
+    "output": {"rows": 1000, "columns": 5, "mean": 45.6, "std": 12.3, "median": 44.5},
+    "execution_time": "2.3s"
+  },
+  "state": "completed",
+  "feedback_required": true,
+  "next_action": "provide_feedback"
+}
+```
+
+**长时间执行响应**:
+```json
+{
+  "response": "📊 数据分析已开始执行，预计需要 30 秒左右。\n\n任务 ID: task_abc123\n\n您可以通过以下方式获取结果：\n1. 输入"查询状态 task_abc123"查看进度\n2. 等待完成后我会通知您\n\n分析完成后，您可以查看详细结果或继续使用其他功能。",
+  "task_id": "task_abc123",
+  "estimated_time": "30s",
+  "state": "executing",
+  "next_action": "wait_or_query_status",
+  "query_methods": {
+    "chat": "输入'查询状态 task_abc123'",
+    "api": "GET /tasks/task_abc123",
+    "websocket": "ws://localhost:8000/ws/tasks/task_abc123"
+  }
+}
+```
+
+### 第四步：用户反馈收集
+
+**目标**: 收集用户对执行结果的满意度反馈。
+
+**处理流程**:
+1. **方式一：界面反馈**（推荐）
+   - 在聊天结果项旁显示"👍 赞"和"👎 踩"按钮
+   - 用户点击图标提交反馈
+   - 记录反馈到系统
+
+2. **方式二：文本反馈**
+   - 用户通过 Chat 方式表达满意/不满意
+   - 支持自然语言反馈（如"结果很好"、"不满意"等）
+   - 解析用户的反馈情感和内容
+
+3. **反馈内容**：
+   - 满意度评分（满意/一般/不满意）
+   - 反馈原因（可选）
+   - 建议或意见（可选）
+
+4. **反馈记录**：
+   - 保存到 Redis（短期）
+   - 同步到 PostgreSQL（长期）
+   - 更新用户画像
+
+**界面反馈响应**:
+```json
+{
+  "response": "感谢您的反馈！",
+  "feedback": {
+    "rating": "positive",
+    "timestamp": "2026-03-14T23:30:00Z",
+    "user_id": "user123",
+    "task_id": "task_abc123",
+    "skill_name": "data-analysis"
+  },
+  "state": "feedback_received"
+}
+```
+
+**文本反馈响应**:
+```json
+{
+  "response": "收到您的反馈！\n\n反馈类型: 满意\n感谢您的支持，我们会继续优化服务质量。",
+  "feedback": {
+    "rating": "positive",
+    "feedback_text": "结果很好，谢谢",
+    "timestamp": "2026-03-14T23:30:00Z"
+  },
+  "state": "feedback_received"
+}
+```
+
+### 第五步：反馈处理与响应
+
+**目标**: 根据用户反馈提供适当的响应。
+
+**处理流程**:
+1. **用户表示不满**：
+   - 真诚道歉
+   - 表示会反馈给人工团队跟踪处理
+   - 提供解决方案或替代方案
+   - 记录问题用于后续改进
+   - 询问用户是否需要转人工客服
+
+2. **用户表示满意**：
+   - 谦虚感谢用户的肯定
+   - 表示会继续努力
+   - 询问是否还需要其他帮助
+   - 记录成功案例用于优化
+
+3. **中立反馈**：
+   - 感谢反馈
+   - 询问可以改进的地方
+   - 提供建议收集渠道
+
+**不满意响应**:
+```json
+{
+  "response": "非常抱歉给您带来了不好的体验！😔\n\n我已经将您的反馈记录下来，并会立即反馈给人工团队进行跟踪处理。我们的工作人员会在 24 小时内联系您。\n\n如果您希望立即转接人工客服，请输入"转人工"。",
+  "feedback_handling": {
+    "escalated": true,
+    "assigned_to": "human_support",
+    "expected_response_time": "24h",
+    "follow_up": true
+  },
+  "state": "feedback_processed",
+  "next_action": "wait_or_escalate"
+}
+```
+
+**满意响应**:
+```json
+{
+  "response": "太好了，谢谢您的支持和肯定！🎉\n\n能够帮到您是我们的荣幸。我们会继续努力，为您提供更好的服务。\n\n还有其他我可以帮助您的吗？",
+  "feedback_handling": {
+    "recorded": true,
+    "sentiment": "positive",
+    "thank_you": true
+  },
+  "state": "feedback_processed",
+  "next_action": "continue_conversation"
+}
+```
+
+## 流程状态机
+
+```
+┌─────────────────┐
+│   初始状态      │
+│ (用户输入)      │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│  技能匹配       │
+│  (分析意图)     │
+└────────┬────────┘
+         │
+    ┌────┴────┐
+    │         │
+    ▼         ▼
+┌────────┐  ┌──────────┐
+│ 找到   │  │ 未找到   │
+│ 技能   │  │ 任何技能 │
+└───┬────┘  └────┬─────┘
+    │            │
+    ▼            ▼
+┌──────────┐  ┌──────────┐
+│ 技能推荐  │  │ 人工处理 │
+└────┬─────┘  └──────────┘
+     │
+     ▼
+┌──────────┐
+│ 用户确认  │
+│ 技能选择  │
+└────┬─────┘
+     │
+     ▼
+┌──────────┐
+│ 参数收集  │
+│ (多轮对话)│
+└────┬─────┘
+     │
+     ▼
+┌──────────┐
+│ 参数确认  │
+└────┬─────┘
+     │
+     ▼
+┌──────────┐
+│ 技能执行  │
+└────┬─────┘
+     │
+     ▼
+┌──────────┐
+│ 结果返回  │
+└────┬─────┘
+     │
+     ▼
+┌──────────┐
+│ 用户反馈  │
+└────┬─────┘
+     │
+  ┌──┴──┐
+  │     │
+  ▼     ▼
+┌────┐ ┌────┐
+│满意 │ │不满│
+└────┘ └────┘
+```
+
+## API 状态码说明
+
+### state 字段值
+
+| 状态 | 说明 |
+|------|------|
+| `initial` | 初始状态，等待用户输入 |
+| `skill_selection` | 技能选择阶段，用户需要从推荐列表中选择 |
+| `collecting_parameters` | 参数收集阶段，逐个收集必需参数 |
+| `awaiting_confirmation` | 等待确认阶段，用户确认参数和执行 |
+| `executing` | 执行阶段，技能正在执行中 |
+| `completed` | 执行完成，结果已返回 |
+| `feedback_received` | 已收到用户反馈 |
+| `feedback_processed` | 反馈已处理 |
+| `escalated` | 已转人工处理 |
+
+### next_action 字段值
+
+| 状态 | 说明 |
+|------|------|
+| `user_select_skill` | 用户需要选择技能 |
+| `provide_parameter` | 用户需要提供参数 |
+| `confirm_or_modify` | 用户需要确认或修改参数 |
+| `wait_or_query_status` | 用户可以等待或查询状态 |
+| `provide_feedback` | 用户可以提供反馈 |
+| `continue_conversation` | 用户可以继续对话 |
+| `wait_or_escalate` | 用户可以等待或转人工 |
+
 ## 功能特性
 
 ### ✓ 已实现
@@ -215,6 +548,13 @@ python test_system.py
    - Swagger 文档
    - 异步支持
    - 错误处理
+
+7. **Chat 处理流程** ⭐
+   - 技能匹配和推荐
+   - 多轮对话参数收集
+   - 技能执行和结果返回
+   - 用户反馈机制
+   - 满意度跟踪
 
 ## 技术栈
 

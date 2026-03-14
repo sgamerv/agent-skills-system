@@ -80,6 +80,15 @@ class ChatResponse(BaseModel):
     next_slot: Optional[str] = None
     ready_to_execute: bool = False
     needs_confirmation: bool = False
+    # 新增字段
+    available_skills: Optional[List[Dict[str, Any]]] = None
+    current_slot: Optional[Dict[str, Any]] = None
+    collected_parameters: Optional[Dict[str, Any]] = None
+    execution_result: Optional[Dict[str, Any]] = None
+    task_id: Optional[str] = None
+    feedback_required: bool = False
+    feedback: Optional[Dict[str, Any]] = None
+    next_action: Optional[str] = None
 
 
 class ExecuteSkillRequest(BaseModel):
@@ -156,7 +165,15 @@ async def chat(request: ChatRequest) -> ChatResponse:
             filled_slots=result.get("filled_slots"),
             next_slot=result.get("next_slot"),
             ready_to_execute=result.get("ready_to_execute", False),
-            needs_confirmation=result.get("needs_confirmation", False)
+            needs_confirmation=result.get("needs_confirmation", False),
+            available_skills=result.get("available_skills"),
+            current_slot=result.get("current_slot"),
+            collected_parameters=result.get("collected_parameters"),
+            execution_result=result.get("execution_result"),
+            task_id=result.get("task_id"),
+            feedback_required=result.get("feedback_required", False),
+            feedback=result.get("feedback"),
+            next_action=result.get("next_action")
         )
     except Exception as e:
         logger.error("Chat error: %s", e, exc_info=True)
