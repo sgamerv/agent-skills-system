@@ -1150,6 +1150,361 @@ pre-commit run --all-files
 4. **Python 版本**
    - 需要 Python 3.12 或更高版本
 
+## API 接口说明
+
+### 根路径
+
+#### GET /
+系统基本信息
+
+**响应示例**:
+```json
+{
+  "app": "Agent Skills System",
+  "version": "1.0.0",
+  "status": "running"
+}
+```
+
+### 健康检查
+
+#### GET /health
+健康检查接口
+
+**响应示例**:
+```json
+{
+  "status": "healthy"
+}
+```
+
+### 聊天接口
+
+#### POST /chat
+发送聊天消息，支持多轮对话和 5 步处理流程
+
+**请求参数**:
+```json
+{
+  "user_input": "我想分析一个数据文件",
+  "user_id": "user123",
+  "conversation_id": "conv_abc123",  // 可选
+  "session_id": "session_xyz789"    // 可选
+}
+```
+
+**响应字段**:
+- `response`: AI 回复内容
+- `conversation_id`: 对话 ID
+- `session_id`: 会话 ID
+- `mode`: 模式（direct/dialogue）
+- `state`: 状态（initial/skill_selection/collecting_parameters/awaiting_confirmation/executing/completed/feedback_received/feedback_processed/escalated）
+- `available_skills`: 可用技能列表
+- `current_slot`: 当前收集的槽位信息
+- `collected_parameters`: 已收集参数
+- `execution_result`: 执行结果
+- `task_id`: 任务 ID
+- `feedback_required`: 是否需要反馈
+- `feedback`: 反馈信息
+- `next_action`: 下一步操作
+
+**响应示例**:
+```json
+{
+  "response": "根据您的需求，我推荐以下技能：",
+  "session_id": "session_xyz789",
+  "conversation_id": "conv_abc123",
+  "mode": "dialogue",
+  "state": "skill_selection",
+  "available_skills": [
+    {
+      "name": "data-analysis",
+      "description": "数据分析技能",
+      "reason": "匹配到关键词：分析"
+    }
+  ],
+  "next_action": "user_select_skill"
+}
+```
+
+### 技能接口
+
+#### GET /skills
+获取所有可用技能列表
+
+**响应示例**:
+```json
+{
+  "skills": [
+    {
+      "name": "data-analysis",
+      "description": "数据分析技能,支持 CSV/Excel 数据处理和统计分析",
+      "category": "analysis",
+      "tags": ["data", "analysis", "statistics"],
+      "version": "1.0.0"
+    }
+  ],
+  "total": 3
+}
+```
+
+#### GET /skills/{skill_name}
+获取指定技能的详细信息
+
+**路径参数**:
+- `skill_name`: 技能名称
+
+**响应示例**:
+```json
+{
+  "name": "data-analysis",
+  "description": "数据分析技能",
+  "category": "analysis",
+  "tags": ["data", "analysis"],
+  "version": "1.0.0",
+  "slots": {
+    "file_path": {
+      "type": "string",
+      "description": "数据文件路径",
+      "required": true
+    }
+  },
+  "can_call": true
+}
+```
+
+#### POST /execute-skill
+直接执行指定技能（不经过对话流程）
+
+**请求参数**:
+```json
+{
+  "skill_name": "data-analysis",
+  "parameters": {
+    "file_path": "/data/sales.csv"
+  },
+  "context": {
+    "user_id": "user123"
+  }
+}
+```
+
+**响应示例**:
+```json
+{
+  "skill": "data-analysis",
+  "success": true,
+  "output": "分析完成",
+  "error": null
+}
+```
+
+### 会话管理接口
+
+#### POST /sessions
+创建新会话
+
+**请求参数**:
+```json
+{
+  "user_id": "user123",
+  "title": "当前会话"  // 可选
+}
+```
+
+**响应示例**:
+```json
+{
+  "session_id": "session_abc123",
+  "user_id": "user123",
+  "status": "active",
+  "title": "当前会话",
+  "created_at": "2026-03-15T01:00:00",
+  "updated_at": "2026-03-15T01:00:00"
+}
+```
+
+#### GET /sessions/{session_id}
+获取会话详情
+
+**路径参数**:
+- `session_id`: 会话 ID
+
+**响应示例**:
+```json
+{
+  "session_id": "session_abc123",
+  "user_id": "user123",
+  "status": "active",
+  "title": "数据分析会话",
+  "created_at": "2026-03-15T01:00:00",
+  "updated_at": "2026-03-15T02:00:00"
+}
+```
+
+#### PUT /sessions/{session_id}
+更新会话信息（目前支持更新标题）
+
+**路径参数**:
+- `session_id`: 会话 ID
+
+**请求参数**:
+```json
+{
+  "title": "新标题"
+}
+```
+
+**响应示例**:
+```json
+{
+  "session_id": "session_abc123",
+  "user_id": "user123",
+  "status": "active",
+  "title": "新标题",
+  "created_at": "2026-03-15T01:00:00",
+  "updated_at": "2026-03-15T03:00:00"
+}
+```
+
+#### GET /users/{user_id}/sessions
+获取用户的所有会话列表
+
+**路径参数**:
+- `user_id`: 用户 ID
+
+**响应示例**:
+```json
+{
+  "sessions": [
+    {
+      "session_id": "session_abc123",
+      "user_id": "user123",
+      "status": "active",
+      "title": "数据分析会话",
+      "created_at": "2026-03-15T01:00:00",
+      "updated_at": "2026-03-15T02:00:00"
+    },
+    {
+      "session_id": "session_def456",
+      "user_id": "user123",
+      "status": "active",
+      "title": "知识问答",
+      "created_at": "2026-03-14T10:00:00",
+      "updated_at": "2026-03-14T11:00:00"
+    }
+  ],
+  "total": 2
+}
+```
+
+#### GET /sessions/{session_id}/messages
+获取会话的所有消息
+
+**路径参数**:
+- `session_id`: 会话 ID
+
+**查询参数**:
+- `limit`: 返回消息数量限制，默认 50
+
+**响应示例**:
+```json
+{
+  "messages": [
+    {
+      "message_id": "msg_001",
+      "session_id": "session_abc123",
+      "conversation_id": "conv_123",
+      "role": "user",
+      "content": "我想分析一个数据文件",
+      "created_at": "2026-03-15T01:00:00",
+      "skill_name": null,
+      "skill_result": null
+    },
+    {
+      "message_id": "msg_002",
+      "session_id": "session_abc123",
+      "conversation_id": "conv_123",
+      "role": "assistant",
+      "content": "好的，请提供数据文件的路径。",
+      "created_at": "2026-03-15T01:00:01",
+      "skill_name": null,
+      "skill_result": null
+    }
+  ],
+  "total": 2
+}
+```
+
+### 用户接口
+
+#### GET /users/{user_id}/profile
+获取用户画像
+
+**路径参数**:
+- `user_id`: 用户 ID
+
+**响应示例**:
+```json
+{
+  "user_id": "user123",
+  "preferences": {
+    "preferred_skills": ["data-analysis"],
+    "language": "zh-CN"
+  },
+  "behavior_stats": {
+    "total_sessions": 10,
+    "total_messages": 100,
+    "skill_usage": {
+      "data-analysis": 5,
+      "knowledge-qa": 3
+    }
+  }
+}
+```
+
+#### GET /users/{user_id}/memories
+获取用户的记忆
+
+**路径参数**:
+- `user_id`: 用户 ID
+
+**查询参数**:
+- `memory_type`: 记忆类型（可选）
+- `limit`: 返回记忆数量限制，默认 10
+
+**响应示例**:
+```json
+{
+  "memories": [
+    {
+      "memory_id": "mem_001",
+      "user_id": "user123",
+      "type": "fact",
+      "content": "用户喜欢使用数据分析功能",
+      "created_at": "2026-03-15T01:00:00"
+    }
+  ],
+  "total": 1
+}
+```
+
+### 错误响应格式
+
+所有接口在出错时都会返回以下格式：
+
+```json
+{
+  "detail": "错误描述信息"
+}
+```
+
+常见 HTTP 状态码：
+- `200 OK`: 请求成功
+- `400 Bad Request`: 请求参数错误
+- `404 Not Found`: 资源不存在
+- `500 Internal Server Error`: 服务器内部错误
+
 ## 总结
 
 本项目已完整实现了架构文档中定义的核心功能,包括:
@@ -1161,6 +1516,7 @@ pre-commit run --all-files
 ✓ 会话管理系统
 ✓ Agent 运行时
 ✓ RESTful API 接口
+✓ 会话管理接口（创建、查询、更新、消息获取）
 ✓ 3个示例技能(知识问答、数据分析、可视化)
 ✓ 完整的测试脚本
 

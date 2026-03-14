@@ -1,11 +1,14 @@
 """会话管理系统 - 管理会话生命周期和上下文"""
 import json
+import logging
 import uuid
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
 
 from backend.models.session import Session, Message, SessionStatus
 from backend.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class SessionManager:
@@ -53,9 +56,14 @@ class SessionManager:
     async def get_session(self, session_id: str) -> Optional[Session]:
         """获取会话"""
         if self.redis_client:
-            session = await self._load_session_from_redis(session_id)
-            if session:
-                return session
+            # 先尝试从 Redis 获取
+            pattern = f"session:*:{session_id}"
+            keys = await self.redis_client.keys(pattern)
+            if keys:
+                data = await self.redis_client.hgetall(keys[0])
+                if data and b'data' in data:
+                    session_dict = json.loads(data[b'data'].decode('utf-8'))
+                    return Session.from_dict(session_dict)
         return None
     
     async def update_session(
@@ -95,10 +103,38 @@ class SessionManager:
         if session:
             session.status = SessionStatus.ARCHIVED
             session.updated_at = datetime.now().isoformat()
-            
+
             if self.redis_client:
                 await self._save_session_to_redis(session)
-    
+
+    async def delete_session(self, session_id: str):
+        """
+        删除会话及其所有消息
+
+        Args:
+            session_id: 会话 ID
+        """
+        if not self.redis_client:
+            return False
+
+        try:
+            # 删除会话数据
+            pattern = f"session:*:{session_id}"
+            keys = await self.redis_client.keys(pattern)
+            if keys:
+                await self.redis_client.delete(*keys)
+
+            # 删除会话的所有消息
+            message_pattern = f"message:{session_id}:*"
+            message_keys = await self.redis_client.keys(message_pattern)
+            if message_keys:
+                await self.redis_client.delete(*message_keys)
+
+            return True
+        except Exception as e:
+            logger.error(f"删除会话失败: {e}")
+            return False
+
     async def get_user_sessions(
         self,
         user_id: str,

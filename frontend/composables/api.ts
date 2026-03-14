@@ -37,6 +37,14 @@ export interface ChatResponse {
   next_slot?: string
   ready_to_execute: boolean
   needs_confirmation: boolean
+  available_skills?: any[]
+  current_slot?: any
+  collected_parameters?: Record<string, any>
+  execution_result?: any
+  task_id?: string
+  feedback_required?: boolean
+  feedback?: any
+  next_action?: string
 }
 
 // 会话接口
@@ -128,6 +136,17 @@ export const api = {
 
   // 获取会话
   getSession: (sessionId: string) => request<Session>(`/sessions/${sessionId}`),
+
+  // 更新会话标题
+  updateSession: (sessionId: string, title: string) => request<Session>(`/sessions/${sessionId}`, {
+    method: 'PUT',
+    body: JSON.stringify({ title }),
+  }),
+
+  // 删除会话
+  deleteSession: (sessionId: string) => request<{ message: string }>(`/sessions/${sessionId}`, {
+    method: 'DELETE',
+  }),
 
   // 获取用户会话列表
   getUserSessions: (userId: string) => request<SessionListResponse>(`/users/${userId}/sessions`),

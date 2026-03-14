@@ -120,6 +120,11 @@ class SessionResponse(BaseModel):
     updated_at: Optional[str] = None
 
 
+class SessionUpdateRequest(BaseModel):
+    """更新会话请求"""
+    title: str
+
+
 # API 路由
 
 @app.get("/")
@@ -296,6 +301,34 @@ async def get_user_sessions(user_id: str):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/sessions/{session_id}", response_model=SessionResponse)
+async def update_session(session_id: str, request: SessionUpdateRequest):
+    """
+    更新会话标题
+    """
+    session_manager: SessionManager = app.state.session_manager
+
+    session = await session_manager.update_session(session_id, title=request.title)
+    if not session:
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+
+    return SessionResponse(**session.to_dict())
+
+
+@app.delete("/sessions/{session_id}")
+async def delete_session(session_id: str):
+    """
+    删除会话及其所有消息
+    """
+    session_manager: SessionManager = app.state.session_manager
+
+    success = await session_manager.delete_session(session_id)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to delete session")
+
+    return {"message": "Session deleted successfully"}
 
 
 @app.get("/sessions/{session_id}/messages")

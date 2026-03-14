@@ -23,6 +23,7 @@ from backend.core.memory import (
     MemoryManager,
     ProfileManager,
 )
+from backend.core.session_manager import MessageManager
 from backend.core.skill_manager import SkillLoader, ResourceManager, SkillRegistry
 from backend.core.skill_orchestrator import (
     SkillExecutionResult,
@@ -114,10 +115,45 @@ class AgentRuntime:
         self.memory_injector = MemoryInjector(self.memory_manager)
         self.profile_manager = ProfileManager(redis_client)
 
+        # 初始化消息管理器
+        self.message_manager = MessageManager(redis_client)
+
         # 构建 Tools
         self.tools = self._build_tools()
 
         # 存储会话状态
+        self._session_states: Dict[str, Dict[str, Any]] = {}
+
+    async def _save_messages(
+        self,
+        user_input: str,
+        response: str,
+        user_id: str,
+        conversation_id: str = None,
+        session_id: str = None
+    ):
+        """保存用户和助手的消息"""
+        if not session_id:
+            return
+
+        try:
+            # 保存用户消息
+            await self.message_manager.add_message(
+                session_id=session_id,
+                role="user",
+                content=user_input,
+                conversation_id=conversation_id
+            )
+
+            # 保存助手消息
+            await self.message_manager.add_message(
+                session_id=session_id,
+                role="assistant",
+                content=response,
+                conversation_id=conversation_id
+            )
+        except Exception as e:
+            logger.error(f"保存消息失败: {e}")
         self._session_states: Dict[str, Dict[str, Any]] = {}
 
     def _build_tools(self) -> List[BaseTool]:
@@ -178,10 +214,16 @@ class AgentRuntime:
 
         # 如果有会话状态，根据状态继续流程
         if session_state:
-            return await self._continue_flow(user_input, user_id, conversation_id, session_id, session_state)
+            result = await self._continue_flow(user_input, user_id, conversation_id, session_id, session_state)
+        else:
+            # 第一步：技能匹配与推荐
+            result = await self._step1_skill_matching(user_input, user_id, conversation_id, session_id, memory_context)
 
-        # 第一步：技能匹配与推荐
-        return await self._step1_skill_matching(user_input, user_id, conversation_id, session_id, memory_context)
+        # 统一保存消息
+        if result and "response" in result:
+            await self._save_messages(user_input, result["response"], user_id, conversation_id, session_id)
+
+        return result
 
     async def _continue_flow(
         self,
