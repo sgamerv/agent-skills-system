@@ -143,9 +143,21 @@ async def chat(request: ChatRequest) -> ChatResponse:
             conversation_id=request.conversation_id,
             session_id=request.session_id,
         )
-        return ChatResponse(**result)
+
+        # 确保所有必需字段都有值
+        return ChatResponse(
+            response=result.get("response", ""),
+            conversation_id=result.get("conversation_id"),
+            session_id=result.get("session_id"),
+            mode=result.get("mode", "direct"),
+            state=result.get("state", "completed"),
+            filled_slots=result.get("filled_slots"),
+            next_slot=result.get("next_slot"),
+            ready_to_execute=result.get("ready_to_execute", False),
+            needs_confirmation=result.get("needs_confirmation", False)
+        )
     except Exception as e:
-        logger.error("Chat error: %s", e)
+        logger.error("Chat error: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 

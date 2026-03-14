@@ -3,6 +3,10 @@ useHead({
   title: '智能对话 - Agent Skills System'
 })
 
+// 加载状态
+const loading = ref(false)
+const error = ref<string | null>(null)
+
 // 消息列表
 const messages = ref([
   {
@@ -15,24 +19,48 @@ const messages = ref([
 const inputMessage = ref('')
 
 // 发送消息
-const sendMessage = () => {
+const sendMessage = async () => {
   if (!inputMessage.value.trim()) return
+
+  const userMessage = inputMessage.value.trim()
 
   // 添加用户消息
   messages.value.push({
     role: 'user',
-    content: inputMessage.value
+    content: userMessage
   })
 
-  // 模拟 AI 回复
-  setTimeout(() => {
+  // 清空输入框
+  inputMessage.value = ''
+
+  // 设置加载状态
+  loading.value = true
+  error.value = null
+
+  try {
+    // 调用后端 API
+    const response = await api.chat({
+      user_input: userMessage,
+      user_id: 'default_user'
+    })
+
+    // 添加 AI 回复
     messages.value.push({
       role: 'assistant',
-      content: '收到您的消息：' + inputMessage.value
+      content: response.response
     })
-  }, 1000)
+  } catch (err: any) {
+    console.error('发送消息失败:', err)
+    error.value = err.message || '发送消息失败'
 
-  inputMessage.value = ''
+    // 添加错误消息
+    messages.value.push({
+      role: 'assistant',
+      content: `抱歉，发生错误：${err.message || '未知错误'}`
+    })
+  } finally {
+    loading.value = false
+  }
 }
 </script>
 
@@ -62,6 +90,15 @@ const sendMessage = () => {
             {{ msg.content }}
           </div>
         </div>
+
+        <!-- 加载状态 -->
+        <div v-if="loading" class="message assistant">
+          <UAvatar icon="i-heroicons-sparkles" size="sm" class="message-avatar" />
+          <div class="message-content loading-content">
+            <UIcon name="i-heroicons-arrow-path" class="loading-icon" />
+            思考中...
+          </div>
+        </div>
       </div>
 
       <!-- 输入框 -->
@@ -70,11 +107,30 @@ const sendMessage = () => {
           v-model="inputMessage"
           placeholder="输入您的问题..."
           size="lg"
+          :disabled="loading"
           @keyup.enter="sendMessage"
         />
-        <UButton size="lg" icon="i-heroicons-paper-airplane" @click="sendMessage">
+        <UButton
+          size="lg"
+          icon="i-heroicons-paper-airplane"
+          :loading="loading"
+          :disabled="loading || !inputMessage.trim()"
+          @click="sendMessage"
+        >
           发送
         </UButton>
+      </div>
+
+      <!-- 错误提示 -->
+      <div v-if="error" class="error-banner">
+        <UIcon name="i-heroicons-exclamation-triangle" />
+        <span>{{ error }}</span>
+        <UButton
+          size="sm"
+          icon="i-heroicons-x-mark"
+          variant="ghost"
+          @click="error = null"
+        />
       </div>
     </UCard>
   </div>
@@ -145,10 +201,37 @@ const sendMessage = () => {
   font-weight: 400;
 }
 
+.loading-content {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.loading-icon {
+  font-size: 1rem;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 .input-area {
   padding: 1.5rem;
   border-top: 1px solid rgb(var(--color-gray-200));
   display: flex;
   gap: 1rem;
+}
+
+.error-banner {
+  padding: 1rem 1.5rem;
+  background: rgb(var(--color-red-50));
+  border-top: 1px solid rgb(var(--color-red-200));
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  color: rgb(var(--color-red-600));
+  font-size: 0.875rem;
 }
 </style>

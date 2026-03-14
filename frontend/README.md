@@ -459,6 +459,151 @@ NUXT_PUBLIC_API_BASE_URL=http://localhost:8000
 const apiUrl = useRuntimeConfig().public.apiBaseUrl
 ```
 
+## 🔌 后端 API 集成
+
+### API 配置
+
+项目已集成后端 API，通过 `composables/api.ts` 统一管理所有 API 请求。
+
+### 环境变量配置
+
+确保 `.env` 文件中配置了正确的后端 API 地址：
+
+```bash
+NUXT_PUBLIC_API_BASE_URL=http://localhost:8000
+```
+
+### API 客户端使用
+
+项目提供了统一的 API 客户端（`composables/api.ts`），所有 API 请求都通过该客户端进行：
+
+```typescript
+import { api } from '~/composables/api'
+
+// 获取技能列表
+const skills = await api.getSkills()
+
+// 发送聊天消息
+const response = await api.chat({
+  user_input: '你好',
+  user_id: 'default_user'
+})
+
+// 获取会话列表
+const sessions = await api.getUserSessions('user_id')
+```
+
+### 可用 API 端点
+
+#### 健康检查
+```typescript
+api.healthCheck() // 返回: { status: string }
+```
+
+#### 技能管理
+```typescript
+api.getSkills() // 获取所有技能
+api.getSkill(skillName: string) // 获取技能详情
+```
+
+#### 聊天
+```typescript
+api.chat(data: ChatRequest) // 发送聊天消息
+// ChatRequest: { user_input, user_id, conversation_id?, session_id? }
+```
+
+#### 会话管理
+```typescript
+api.createSession(userId: string, title?: string) // 创建会话
+api.getSession(sessionId: string) // 获取会话详情
+api.getUserSessions(userId: string) // 获取用户会话列表
+api.getSessionMessages(sessionId: string, limit?: number) // 获取会话消息
+```
+
+#### 用户数据
+```typescript
+api.getUserProfile(userId: string) // 获取用户画像
+api.getUserMemories(userId: string, memoryType?: string, limit?: number) // 获取用户记忆
+```
+
+### 错误处理
+
+API 客户端提供了统一的错误处理机制：
+
+```typescript
+try {
+  const response = await api.getSkills()
+} catch (error) {
+  if (error instanceof ApiError) {
+    console.error('API 错误:', error.message, error.statusCode)
+  } else {
+    console.error('未知错误:', error)
+  }
+}
+```
+
+### 页面中的实际应用
+
+#### 技能列表页面 (pages/skills.vue)
+
+- 从后端 API 获取技能列表
+- 显示加载状态和错误提示
+- 技能卡片展示技能信息
+
+```vue
+<script setup lang="ts">
+const skills = ref([])
+const loading = ref(true)
+const error = ref(null)
+
+const fetchSkills = async () => {
+  try {
+    const response = await api.getSkills()
+    skills.value = response.skills
+  } catch (err) {
+    error.value = err.message
+  } finally {
+    loading.value = false
+  }
+}
+
+onMounted(() => fetchSkills())
+</script>
+```
+
+#### 聊天页面 (pages/chat.vue)
+
+- 通过 API 发送用户消息
+- 显示 AI 回复
+- 支持加载状态显示
+
+```vue
+<script setup lang="ts">
+const sendMessage = async () => {
+  try {
+    const response = await api.chat({
+      user_input: inputMessage.value,
+      user_id: 'default_user'
+    })
+    messages.value.push({
+      role: 'assistant',
+      content: response.response
+    })
+  } catch (err) {
+    console.error('发送失败:', err)
+  }
+}
+</script>
+```
+
+### 注意事项
+
+1. **启动后端服务**：确保后端服务已启动并运行在 `http://localhost:8000`
+2. **CORS 配置**：后端已配置 CORS 允许跨域请求
+3. **错误处理**：所有 API 调用都应包含错误处理
+4. **加载状态**：在异步请求时显示加载状态，提升用户体验
+5. **数据格式**：确保前端数据格式与后端 API 响应格式一致
+
 ## 🌓 深色模式
 
 Nuxt UI 自动支持深色模式。你可以在组件中使用 `useColorMode()` 来切换主题：

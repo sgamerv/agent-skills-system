@@ -190,32 +190,37 @@ class AgentRuntime:
         memory_context: Dict[str, Any] = None
     ) -> str:
         """尝试直接执行(不需要 Slot Filling)"""
-        # 判断是否有足够的参数
-        has_enough_params = await self._check_parameters(user_input)
-        
-        if not has_enough_params:
-            raise InsufficientParametersError()
-        
-        # 构建系统提示词
-        system_prompt = SYSTEM_PROMPT.format(
-            skills_info=self.skill_registry.get_skills_summary()
-        )
-        
-        # 添加记忆上下文
-        if memory_context:
-            system_prompt += f"\n\n用户记忆:\n{memory_context.get('facts', '无')}"
-            system_prompt += f"\n\n用户偏好:\n{memory_context.get('preferences', '无')}"
-        
-        # 直接执行
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", system_prompt),
-            ("human", "{input}")
-        ])
-        
-        chain = prompt | self.llm
-        result = await chain.ainvoke({"input": user_input})
-        
-        return result.content
+        try:
+            # 判断是否有足够的参数
+            has_enough_params = await self._check_parameters(user_input)
+
+            if not has_enough_params:
+                raise InsufficientParametersError()
+
+            # 构建系统提示词
+            system_prompt = SYSTEM_PROMPT.format(
+                skills_info=self.skill_registry.get_skills_summary()
+            )
+
+            # 添加记忆上下文
+            if memory_context:
+                system_prompt += f"\n\n用户记忆:\n{memory_context.get('facts', '无')}"
+                system_prompt += f"\n\n用户偏好:\n{memory_context.get('preferences', '无')}"
+
+            # 直接执行
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", system_prompt),
+                ("human", "{input}")
+            ])
+
+            chain = prompt | self.llm
+            result = await chain.ainvoke({"input": user_input})
+
+            return result.content
+        except Exception as e:
+            logger.error(f"Error in direct execution: {e}")
+            # 如果 LLM 连接失败，返回简单的默认响应
+            return f"收到您的消息：{user_input}\n\n（注意：LLM 服务未连接，返回的是模拟响应。请启动 Xinference 服务以获得真实 AI 回复。）"
     
     async def chat_with_dialogue(
         self,
@@ -283,6 +288,7 @@ class AgentRuntime:
         try:
             response = await self.llm.ainvoke(prompt)
             response = response.strip()
+            logger.debug(f"Raw LLM response for intent analysis: {response}")
 
             # 清理响应
             if response.startswith("```json"):
@@ -293,18 +299,24 @@ class AgentRuntime:
                 response = response[:-3]
             response = response.strip()
 
-            result = json.loads(response)
-            return {
-                "skill": result.get("skill"),
-                "needs_slot_filling": result.get("needs_slot_filling", False),
-                "extracted_params": result.get("extracted_params", {}),
-                "confidence": result.get("confidence", 0.0),
-            }
+            # 尝试提取 JSON
+            json_start = response.find("{")
+            json_end = response.rfind("}")
+            if json_start >= 0 and json_end > json_start:
+                json_str = response[json_start:json_end + 1]
+                result = json.loads(json_str)
+                return {
+                    "skill": result.get("skill"),
+                    "needs_slot_filling": result.get("needs_slot_filling", False),
+                    "extracted_params": result.get("extracted_params", {}),
+                    "confidence": result.get("confidence", 0.0),
+                }
         except json.JSONDecodeError as e:
-            logger.error("Failed to parse intent analysis response: %s", e)
+            logger.error(f"Failed to parse intent analysis response: {e}\nResponse: {response}")
         except Exception as e:
-            logger.error("Error analyzing intent: %s", e)
+            logger.error(f"Error analyzing intent: {e}")
 
+        # 默认返回，表示没有特定的技能需要调用
         return {
             "skill": None,
             "needs_slot_filling": False,
@@ -334,6 +346,7 @@ class AgentRuntime:
         try:
             response = await self.llm.ainvoke(prompt)
             response = response.strip()
+            logger.debug(f"Raw LLM response for parameter check: {response}")
 
             # 清理响应
             if response.startswith("```json"):
@@ -344,15 +357,20 @@ class AgentRuntime:
                 response = response[:-3]
             response = response.strip()
 
-            result = json.loads(response)
-            return result.get("has_enough", False)
+            # 尝试提取 JSON
+            json_start = response.find("{")
+            json_end = response.rfind("}")
+            if json_start >= 0 and json_end > json_start:
+                json_str = response[json_start:json_end + 1]
+                result = json.loads(json_str)
+                return result.get("has_enough", False)
         except json.JSONDecodeError as e:
-            logger.error("Failed to parse parameter check response: %s", e)
+            logger.error(f"Failed to parse parameter check response: {e}\nResponse: {response}")
         except Exception as e:
-            logger.error("Error checking parameters: %s", e)
+            logger.error(f"Error checking parameters: {e}")
 
-        # 默认为 false,走对话流程
-        return False
+        # 默认为 true（对于简单问答），走直接执行
+        return True
     
     async def execute_skill(
         self,

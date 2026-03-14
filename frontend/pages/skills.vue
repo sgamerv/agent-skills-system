@@ -3,33 +3,51 @@ useHead({
   title: '技能列表 - Agent Skills System'
 })
 
+// 加载状态
+const loading = ref(true)
+const error = ref<string | null>(null)
+
 // 技能列表
-const skills = ref([
-  {
-    name: '智能对话',
-    description: '支持多轮对话，自动识别意图和提取参数',
-    icon: 'i-heroicons-chat-bubble-left',
-    status: 'active'
-  },
-  {
-    name: '知识问答',
-    description: '基于 RAG 技术的文档检索和智能回答',
-    icon: 'i-heroicons-magnifying-glass',
-    status: 'active'
-  },
-  {
-    name: '数据分析',
-    description: '支持 CSV/Excel 数据处理和统计分析',
-    icon: 'i-heroicons-chart-bar',
-    status: 'active'
-  },
-  {
-    name: '数据可视化',
-    description: '将数据分析结果生成直观图表',
-    icon: 'i-heroicons-chart-pie',
-    status: 'active'
+const skills = ref<any[]>([])
+
+// 技能图标映射
+const skillIconMap: Record<string, string> = {
+  '智能对话': 'i-heroicons-chat-bubble-left',
+  '知识问答': 'i-heroicons-magnifying-glass',
+  '数据分析': 'i-heroicons-chart-bar',
+  '数据可视化': 'i-heroicons-chart-pie',
+  'default': 'i-heroicons-cube'
+}
+
+// 获取技能图标
+const getSkillIcon = (name: string) => {
+  return skillIconMap[name] || skillIconMap.default
+}
+
+// 获取技能列表
+const fetchSkills = async () => {
+  loading.value = true
+  error.value = null
+
+  try {
+    const response = await api.getSkills()
+    skills.value = response.skills.map(skill => ({
+      ...skill,
+      icon: getSkillIcon(skill.name),
+      status: 'active'
+    }))
+  } catch (err: any) {
+    console.error('获取技能列表失败:', err)
+    error.value = err.message || '获取技能列表失败'
+  } finally {
+    loading.value = false
   }
-])
+}
+
+// 页面加载时获取数据
+onMounted(() => {
+  fetchSkills()
+})
 </script>
 
 <template>
@@ -39,19 +57,51 @@ const skills = ref([
         <h1 class="title">技能列表</h1>
         <p class="subtitle">查看和管理所有可用的 AI 技能</p>
 
-        <div class="skills-grid">
+        <!-- 加载状态 -->
+        <div v-if="loading" class="loading-container">
+          <UIcon name="i-heroicons-arrow-path" class="loading-icon" />
+          <p>加载中...</p>
+        </div>
+
+        <!-- 错误状态 -->
+        <div v-else-if="error" class="error-container">
+          <UIcon name="i-heroicons-exclamation-triangle" class="error-icon" />
+          <p>{{ error }}</p>
+          <UButton @click="fetchSkills" icon="i-heroicons-arrow-clockwise">重试</UButton>
+        </div>
+
+        <!-- 技能列表 -->
+        <div v-else class="skills-grid">
           <UCard v-for="skill in skills" :key="skill.name">
             <div class="skill-card">
               <UIcon :name="skill.icon" class="skill-icon" />
               <div class="skill-info">
                 <h3>{{ skill.name }}</h3>
                 <p>{{ skill.description }}</p>
+                <div v-if="skill.category" class="skill-tags">
+                  <UBadge size="sm" color="purple" variant="subtle">{{ skill.category }}</UBadge>
+                  <UBadge
+                    v-for="tag in skill.tags"
+                    :key="tag"
+                    size="sm"
+                    color="gray"
+                    variant="subtle"
+                  >
+                    {{ tag }}
+                  </UBadge>
+                </div>
               </div>
               <UBadge :color="skill.status === 'active' ? 'green' : 'red'" variant="subtle">
                 {{ skill.status === 'active' ? '已启用' : '已禁用' }}
               </UBadge>
             </div>
           </UCard>
+
+          <!-- 空状态 -->
+          <div v-if="skills.length === 0" class="empty-container">
+            <UIcon name="i-heroicons-inbox" class="empty-icon" />
+            <p>暂无技能</p>
+          </div>
         </div>
       </UContainer>
     </div>
@@ -81,6 +131,33 @@ const skills = ref([
   font-size: 1.125rem;
   font-weight: 300;
   color: rgba(255, 255, 255, 0.9);
+}
+
+.loading-container,
+.error-container,
+.empty-container {
+  text-align: center;
+  padding: 4rem 2rem;
+  color: white;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+}
+
+.loading-icon {
+  font-size: 3rem;
+  animation: spin 1s linear infinite;
+}
+
+.error-icon,
+.empty-icon {
+  font-size: 3rem;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 .skills-grid {
@@ -118,6 +195,13 @@ const skills = ref([
   line-height: 1.5;
   color: #4a4a68;
   font-weight: 400;
+  margin-bottom: 0.75rem;
+}
+
+.skill-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
 }
 
 @media (max-width: 768px) {
