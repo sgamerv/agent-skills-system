@@ -4,8 +4,8 @@ import uuid
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
 
-from models.session import Session, Message, SessionStatus
-from config import settings
+from backend.models.session import Session, Message, SessionStatus
+from backend.config import settings
 
 
 class SessionManager:

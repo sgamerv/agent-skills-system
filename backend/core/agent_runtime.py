@@ -10,21 +10,21 @@ from langchain.tools import BaseTool
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_openai import ChatOpenAI
 
-from config import settings
-from config.prompts import (
+from backend.config import settings
+from backend.config.prompts import (
     INTENT_ANALYSIS_PROMPT,
     SKILL_EXECUTION_PROMPT,
     SYSTEM_PROMPT,
 )
-from core.dialogue_manager import DialogueManager
-from core.memory import (
+from backend.core.dialogue_manager import DialogueManager
+from backend.core.memory import (
     MemoryExtractor,
     MemoryInjector,
     MemoryManager,
     ProfileManager,
 )
-from core.skill_manager import SkillLoader, ResourceManager, SkillRegistry
-from core.skill_orchestrator import (
+from backend.core.skill_manager import SkillLoader, ResourceManager, SkillRegistry
+from backend.core.skill_orchestrator import (
     SkillExecutionResult,
     SkillOrchestrator,
     SkillCall,

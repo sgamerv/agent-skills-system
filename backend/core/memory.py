@@ -4,7 +4,7 @@ import uuid
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 
-from models.memory import Memory, MemoryType, MemorySource, UserProfile
+from backend.models.memory import Memory, MemoryType, MemorySource, UserProfile
 
 
 class MemoryExtractor:

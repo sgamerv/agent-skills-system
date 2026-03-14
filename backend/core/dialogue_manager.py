@@ -7,8 +7,8 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from config.prompts import CONFIRMATION_MESSAGE_TEMPLATE, SLOT_EXTRACTION_PROMPT
-from models.dialogue import (
+from backend.config.prompts import CONFIRMATION_MESSAGE_TEMPLATE, SLOT_EXTRACTION_PROMPT
+from backend.models.dialogue import (
     DialogueContext,
     DialogueState,
     SlotDefinition,

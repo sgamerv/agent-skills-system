@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import networkx as nx
 
-from core.skill_manager import SkillRegistry, SkillLoader, ResourceManager
+from backend.core.skill_manager import SkillRegistry, SkillLoader, ResourceManager
 
 
 @dataclass

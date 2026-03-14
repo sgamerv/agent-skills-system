@@ -13,7 +13,7 @@ sys.path.insert(0, str(project_root))
 
 def create_directories():
     """创建必要的目录"""
-    from config import settings
+    from backend.config import settings
     
     directories = [
         settings.UPLOAD_DIR,
@@ -31,7 +31,7 @@ def create_directories():
 
 def test_redis_connection():
     """测试 Redis 连接"""
-    from config import settings
+    from backend.config import settings
     try:
         import redis.asyncio as redis
         client = redis.from_url(settings.REDIS_URL)
@@ -49,7 +49,7 @@ def test_redis_connection():
 
 def test_llm_connection():
     """测试 LLM 连接"""
-    from config import settings
+    from backend.config import settings
     try:
         from langchain_openai import ChatOpenAI
         llm = ChatOpenAI(
@@ -69,8 +69,8 @@ def test_llm_connection():
 
 def scan_skills():
     """扫描并验证技能"""
-    from core.skill_manager import SkillRegistry
-    from config import settings
+    from backend.core.skill_manager import SkillRegistry
+    from backend.config import settings
     
     try:
         registry = SkillRegistry(settings.SKILLS_DIR)

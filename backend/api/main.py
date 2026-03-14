@@ -9,10 +9,10 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from config import settings
-from core.agent_runtime import AgentRuntime
-from core.memory import ProfileManager
-from core.session_manager import MessageManager, SessionManager
+from backend.config import settings
+from backend.core.agent_runtime import AgentRuntime
+from backend.core.memory import ProfileManager
+from backend.core.session_manager import MessageManager, SessionManager
 
 
 logger = logging.getLogger(__name__)
@@ -303,7 +303,7 @@ async def get_user_memories(user_id: str, memory_type: Optional[str] = None, lim
     """
     获取用户的记忆
     """
-    from models.memory import MemoryType
+    from backend.models.memory import MemoryType
     
     agent: AgentRuntime = app.state.agent
     

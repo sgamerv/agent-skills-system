@@ -20,11 +20,11 @@
    - 点击 "Create repository"
 
 3. **推送代码**
-   - 创建仓库后，复制仓库 URL（如：`https://github.com/your-username/agent-skills-system.git`）
+   - 创建仓库后，复制仓库 URL（如：`https://github.com/sgamerv/agent-skills-system.git`）
    - 在项目目录执行以下命令：
 
 ```bash
-git remote add origin https://github.com/your-username/agent-skills-system.git
+git remote add origin https://github.com/sgamerv/agent-skills-system.git
 git branch -M main
 git push -u origin main
 ```
