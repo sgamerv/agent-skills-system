@@ -226,6 +226,36 @@ const formatTime = (timeStr?: string) => {
 
   return date.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })
 }
+
+// 消息列表引用
+const messagesContainer = ref<HTMLElement | null>(null)
+
+// 自动滚动到底部
+const scrollToBottom = () => {
+  nextTick(() => {
+    setTimeout(() => {
+      if (messagesContainer.value) {
+        messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
+      }
+    }, 0)
+  })
+}
+
+// 监听消息变化，自动滚动
+watch(messages, () => {
+  scrollToBottom()
+}, { deep: true })
+
+// 页面加载时获取会话列表
+onMounted(() => {
+  loadSessions()
+  // 初始滚动到底部
+  nextTick(() => {
+    setTimeout(() => {
+      scrollToBottom()
+    }, 100)
+  })
+})
 </script>
 
 <template>
@@ -285,9 +315,9 @@ const formatTime = (timeStr?: string) => {
       </aside>
 
       <!-- 右侧聊天区域 -->
-      <UCard class="chat-container">
+      <div class="chat-container">
         <!-- 消息列表 -->
-        <div class="messages">
+        <div ref="messagesContainer" class="messages">
           <div
             v-for="(msg, index) in messages"
             :key="index"
@@ -351,16 +381,17 @@ const formatTime = (timeStr?: string) => {
             @click="error = null"
           />
         </div>
-      </UCard>
+      </div>
     </div>
   </div>
 </template>
 
 <style scoped>
 .chat {
-  min-height: 100vh;
-  padding: 2rem;
+  height: 100vh;
+  padding: 1rem;
   background: linear-gradient(135deg, rgb(var(--color-gray-50)) 0%, rgb(var(--color-gray-100)) 100%);
+  overflow: hidden;
 }
 
 .chat-layout {
@@ -368,7 +399,8 @@ const formatTime = (timeStr?: string) => {
   gap: 1.5rem;
   max-width: 1400px;
   margin: 0 auto;
-  height: calc(100vh - 4rem);
+  height: calc(100vh - 2rem);
+  overflow: hidden;
 }
 
 /* 左侧边栏 */
@@ -380,15 +412,18 @@ const formatTime = (timeStr?: string) => {
   flex-direction: column;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
   border: 1px solid rgb(var(--color-gray-200));
+  overflow: hidden;
+  height: 100%;
 }
 
 .sidebar-header {
-  padding: 1.5rem;
+  padding: 1.25rem;
   border-bottom: 1px solid rgb(var(--color-gray-200));
   display: flex;
   justify-content: space-between;
   align-items: center;
   background: linear-gradient(180deg, rgb(var(--color-gray-50)) 0%, white 100%);
+  flex-shrink: 0;
 }
 
 .sidebar-header h2 {
@@ -401,10 +436,12 @@ const formatTime = (timeStr?: string) => {
 .sessions-list {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 1rem;
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+  min-height: 0;
 }
 
 .session-item {
@@ -507,16 +544,22 @@ const formatTime = (timeStr?: string) => {
   border: 1px solid rgb(var(--color-gray-200));
   background: white;
   overflow: hidden;
+  min-width: 0;
+  min-height: 0;
 }
 
 .messages {
   flex: 1;
   overflow-y: auto;
-  padding: 2rem;
+  overflow-x: hidden;
+  padding: 1.5rem;
+  padding-bottom: 90px;
   display: flex;
   flex-direction: column;
-  gap: 1.25rem;
+  gap: 1rem;
   background: linear-gradient(180deg, rgb(var(--color-gray-50)) 0%, white 100%);
+  min-height: 0;
+  min-width: 0;
 }
 
 .message {
@@ -525,6 +568,7 @@ const formatTime = (timeStr?: string) => {
   gap: 0.875rem;
   max-width: 75%;
   animation: messageSlideIn 0.3s ease;
+  flex-shrink: 0;
 }
 
 @keyframes messageSlideIn {
@@ -594,15 +638,25 @@ const formatTime = (timeStr?: string) => {
 }
 
 .input-area {
-  padding: 1.5rem;
-  border-top: 1px solid rgb(var(--color-gray-200));
+  padding: 1.25rem;
+  border-top: 2px solid rgb(var(--color-gray-200));
   display: flex;
   gap: 1rem;
-  background: linear-gradient(180deg, rgb(var(--color-gray-50)) 0%, white 100%);
+  background: white;
+  flex-shrink: 0;
+  height: 80px;
+  min-height: 80px;
+  align-items: center;
+  box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.04);
+  z-index: 20;
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
 }
 
 .error-banner {
-  padding: 1rem 1.5rem;
+  padding: 1rem 1.25rem;
   background: linear-gradient(135deg, rgb(var(--color-red-50)) 0%, rgb(var(--color-red-100)) 100%);
   border-top: 1px solid rgb(var(--color-red-200));
   display: flex;
@@ -611,6 +665,12 @@ const formatTime = (timeStr?: string) => {
   color: rgb(var(--color-red-600));
   font-size: 0.875rem;
   font-weight: 500;
+  flex-shrink: 0;
+  position: absolute;
+  bottom: 80px;
+  left: 0;
+  right: 0;
+  z-index: 11;
 }
 
 /* 滚动条美化 */
@@ -649,6 +709,7 @@ const formatTime = (timeStr?: string) => {
   .sidebar {
     width: 100%;
     height: 200px;
+    flex-shrink: 0;
   }
 
   .message {
@@ -658,10 +719,17 @@ const formatTime = (timeStr?: string) => {
   .messages {
     padding: 1rem;
     gap: 1rem;
+    max-height: calc(100% - 80px);
   }
 
   .input-area {
     padding: 1rem;
+    height: 80px;
+    min-height: 80px;
+  }
+
+  .error-banner {
+    bottom: 80px;
   }
 }
 </style>
