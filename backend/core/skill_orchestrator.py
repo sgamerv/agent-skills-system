@@ -235,15 +235,19 @@ class SkillOrchestrator:
             "scripts",
             "main.py"
         )
-        
+
         if os.path.exists(script_path):
             try:
-                return self.resource_manager.execute_script(
+                result = self.resource_manager.execute_script(
                     skill_name,
                     "main.py",
                     **parameters,
                     context=context
                 )
+                # 如果返回的是协程，等待它完成
+                if result is not None and hasattr(result, '__await__'):
+                    return await result
+                return result
             except Exception as e:
                 print(f"Error executing script for {skill_name}: {e}")
                 return None

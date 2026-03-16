@@ -26,6 +26,9 @@ const messages = ref([
 // 输入框内容
 const inputMessage = ref('')
 
+// 输入框引用
+const inputRef = ref<HTMLElement | null>(null)
+
 // 创建新会话
 const createNewSession = async () => {
   try {
@@ -147,6 +150,14 @@ const sendMessage = async () => {
   // 如果没有当前会话，先创建一个
   if (!currentSessionId.value) {
     await createNewSession()
+    // 等待一小段时间确保session_id已设置
+    await new Promise(resolve => setTimeout(resolve, 100))
+  }
+
+  // 确保有session_id
+  if (!currentSessionId.value) {
+    console.error('无法获取session_id')
+    return
   }
 
   // 更新会话标题（如果是第一条消息）
@@ -166,22 +177,45 @@ const sendMessage = async () => {
   // 清空输入框
   inputMessage.value = ''
 
+  // 重新聚焦到输入框
+  nextTick(() => {
+    setTimeout(() => {
+      // 尝试多种方式获取 textarea 元素
+      let textareaElement = null
+
+      if (inputRef.value) {
+        // 方式1: 如果 ref 指向组件实例，尝试获取 $el
+        if (inputRef.value.$el) {
+          textareaElement = inputRef.value.$el.querySelector('textarea')
+        }
+        // 方式2: 如果 ref 直接是 DOM 元素
+        else if (inputRef.value instanceof HTMLElement) {
+          textareaElement = inputRef.value.querySelector('textarea')
+        }
+      }
+
+      // 方式3: 直接在文档中查找 textarea（备用方案）
+      if (!textareaElement) {
+        textareaElement = document.querySelector('.input-area textarea')
+      }
+
+      if (textareaElement) {
+        textareaElement.focus()
+      }
+    }, 50)
+  })
+
   // 设置加载状态
   loading.value = true
   error.value = null
 
   try {
-    // 调用后端 API
+    // 调用后端 API，确保传递有效的session_id
     const response = await api.chat({
       user_input: userMessage,
       user_id: userId.value,
-      session_id: currentSessionId.value || undefined
+      session_id: currentSessionId.value
     })
-
-    // 更新会话ID（如果是第一次创建的会话）
-    if (response.session_id && !currentSessionId.value) {
-      currentSessionId.value = response.session_id
-    }
 
     // 添加 AI 回复
     messages.value.push({
@@ -201,6 +235,24 @@ const sendMessage = async () => {
     loading.value = false
     await loadSessions() // 刷新会话列表
   }
+}
+
+// 处理 Ctrl+Enter 键
+const handleEnterWithCtrl = (event: KeyboardEvent) => {
+  // Ctrl+Enter 换行，让默认行为生效
+  event.preventDefault()
+  // 在光标位置插入换行符
+  const textarea = event.target as HTMLTextAreaElement
+  const start = textarea.selectionStart
+  const end = textarea.selectionEnd
+  const value = textarea.value
+
+  inputMessage.value = value.substring(0, start) + '\n' + value.substring(end)
+
+  // 恢复光标位置
+  nextTick(() => {
+    textarea.selectionStart = textarea.selectionEnd = start + 1
+  })
 }
 
 // 页面加载时获取会话列表
@@ -350,14 +402,20 @@ onMounted(() => {
           </div>
         </div>
 
-        <!-- 输入框 -->
+        <!-- 输入框 - 在 chat-container 内部 -->
         <div class="input-area">
-          <UInput
+          <UTextarea
+            ref="inputRef"
             v-model="inputMessage"
-            placeholder="输入您的问题..."
+            placeholder="输入您的问题... (Ctrl+Enter 换行，Enter 发送)"
             size="lg"
             :disabled="loading"
-            @keyup.enter="sendMessage"
+            :rows="2"
+            :maxrows="4"
+            autoresize
+            class="chat-input"
+            @keydown.enter.exact="sendMessage"
+            @keydown.enter.ctrl.exact="handleEnterWithCtrl"
           />
           <UButton
             size="lg"
@@ -370,7 +428,7 @@ onMounted(() => {
           </UButton>
         </div>
 
-        <!-- 错误提示 -->
+        <!-- 错误提示 - 在 chat-container 内部 -->
         <div v-if="error" class="error-banner">
           <UIcon name="i-heroicons-exclamation-triangle" />
           <span>{{ error }}</span>
@@ -546,6 +604,7 @@ onMounted(() => {
   overflow: hidden;
   min-width: 0;
   min-height: 0;
+  position: relative; /* 为内部绝对定位元素提供参考 */
 }
 
 .messages {
@@ -553,7 +612,7 @@ onMounted(() => {
   overflow-y: auto;
   overflow-x: hidden;
   padding: 1.5rem;
-  padding-bottom: 90px;
+  padding-bottom: 130px; /* 增加底部内边距适应新的输入框高度 */
   display: flex;
   flex-direction: column;
   gap: 1rem;
@@ -603,6 +662,12 @@ onMounted(() => {
   font-weight: 400;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
   word-wrap: break-word;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  white-space: pre-wrap;
+  white-space: -moz-pre-wrap;
+  white-space: -pre-wrap;
+  white-space: -o-pre-wrap;
 }
 
 .message.user .message-content {
@@ -638,21 +703,54 @@ onMounted(() => {
 }
 
 .input-area {
-  padding: 1.25rem;
+  padding: 0.75rem 1rem 1rem 1rem;
   border-top: 2px solid rgb(var(--color-gray-200));
   display: flex;
-  gap: 1rem;
+  gap: 0.75rem;
+  align-items: flex-end; /* 底部对齐 */
   background: white;
   flex-shrink: 0;
-  height: 80px;
-  min-height: 80px;
-  align-items: center;
+  height: 120px; /* 增加高度适应 textarea */
+  min-height: 120px;
   box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.04);
   z-index: 20;
   position: absolute;
   bottom: 0;
   left: 0;
   right: 0;
+}
+
+.input-area :deep(.chat-input) {
+  flex: 1;
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0;
+}
+
+.input-area :deep(.chat-input .textarea) {
+  flex: 1;
+  font-size: 1rem;
+  line-height: 1.5;
+  resize: none;
+  min-height: 60px;
+  max-height: 90px;
+}
+
+.input-area :deep(.chat-input .textarea-wrapper) {
+  flex: 1;
+  width: 100%;
+  max-width: 100%;
+}
+
+.input-area :deep(.chat-input textarea) {
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0;
+}
+
+.input-area button {
+  flex-shrink: 0;
+  margin-bottom: 0.25rem;
 }
 
 .error-banner {
@@ -667,7 +765,7 @@ onMounted(() => {
   font-weight: 500;
   flex-shrink: 0;
   position: absolute;
-  bottom: 80px;
+  bottom: 120px; /* 调整到输入框上方 */
   left: 0;
   right: 0;
   z-index: 11;
@@ -724,12 +822,18 @@ onMounted(() => {
 
   .input-area {
     padding: 1rem;
-    height: 80px;
-    min-height: 80px;
+    height: 90px;
+    min-height: 90px;
   }
 
   .error-banner {
-    bottom: 80px;
+    bottom: 90px;
+  }
+
+  .input-area {
+    padding: 1rem;
+    height: 90px;
+    min-height: 90px;
   }
 }
 </style>

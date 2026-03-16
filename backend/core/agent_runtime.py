@@ -124,6 +124,55 @@ class AgentRuntime:
         # 存储会话状态
         self._session_states: Dict[str, Dict[str, Any]] = {}
 
+        # Redis客户端用于持久化session_state
+        self.redis_client = redis_client
+
+    async def _get_session_state(self, state_key: str) -> Dict[str, Any] | None:
+        """从Redis或内存获取会话状态"""
+        # 先从Redis获取
+        if self.redis_client:
+            try:
+                state_data = await self.redis_client.get(f"session_state:{state_key}")
+                if state_data:
+                    logger.info(f"[DEBUG] 从Redis获取到session_state: {state_key}")
+                    return json.loads(state_data)
+            except Exception as e:
+                logger.error(f"从Redis获取会话状态失败: {e}")
+
+        # 降级到内存获取
+        return self._session_states.get(state_key)
+
+    async def _set_session_state(self, state_key: str, state: Dict[str, Any]):
+        """将会话状态保存到Redis和内存"""
+        # 保存到Redis
+        if self.redis_client:
+            try:
+                await self.redis_client.setex(
+                    f"session_state:{state_key}",
+                    3600,  # 1小时过期
+                    json.dumps(state)
+                )
+                logger.info(f"[DEBUG] session_state已保存到Redis: {state_key}")
+            except Exception as e:
+                logger.error(f"保存会话状态到Redis失败: {e}")
+
+        # 同时保存到内存（降级）
+        self._session_states[state_key] = state
+        logger.info(f"[DEBUG] session_state已保存到内存: {state_key}")
+
+    async def _clear_session_state(self, state_key: str):
+        """清除会话状态"""
+        # 从Redis删除
+        if self.redis_client:
+            try:
+                await self.redis_client.delete(f"session_state:{state_key}")
+            except Exception as e:
+                logger.error(f"从Redis删除会话状态失败: {e}")
+
+        # 从内存删除
+        if state_key in self._session_states:
+            del self._session_states[state_key]
+
     async def _save_messages(
         self,
         user_input: str,
@@ -210,7 +259,8 @@ class AgentRuntime:
 
         # 检查会话状态
         state_key = f"{user_id}:{session_id or 'default'}"
-        session_state = self._session_states.get(state_key)
+        session_state = await self._get_session_state(state_key)
+        logger.info(f"[DEBUG] 检查会话状态: state_key={state_key}, session_id={session_id}, session_state={session_state}")
 
         # 如果有会话状态，根据状态继续流程
         if session_state:
@@ -238,11 +288,22 @@ class AgentRuntime:
         current_state = session_state.get("state")
 
         if current_state == "skill_selection":
-            # 用户选择了技能，进入第二步
+            # 用户处于技能选择状态，尝试解析用户选择的技能
+            selected_skill = self._parse_skill_selection(user_input, session_state.get("matched_skills"))
+
+            if not selected_skill:
+                # 用户没有选择有效技能，重新显示技能列表
+                logger.info(f"用户输入无效技能选择: {user_input}，重新执行技能匹配")
+                return await self._step1_skill_matching(user_input, user_id, conversation_id, session_id)
+
+            # 用户选择了有效技能，进入参数收集
+            logger.info(f"用户选择了技能: {selected_skill}，进入参数收集阶段")
             return await self._step2_parameter_collection(user_input, user_id, conversation_id, session_id, session_state)
+
         elif current_state == "collecting_parameters":
             # 用户提供了参数，继续收集或进入确认
             return await self._step2_parameter_collection(user_input, user_id, conversation_id, session_id, session_state)
+
         elif current_state == "awaiting_confirmation":
             # 用户确认或修改参数
             if "确认" in user_input or "确定" in user_input:
@@ -250,12 +311,15 @@ class AgentRuntime:
             else:
                 # 用户想修改参数，重新进入参数收集
                 return await self._step2_parameter_collection(user_input, user_id, conversation_id, session_id, session_state)
+
         elif current_state == "feedback_required":
             # 用户提供了反馈
             return await self._step5_feedback_handling(user_input, user_id, conversation_id, session_id, session_state)
+
         else:
             # 未知状态，重新开始
-            del self._session_states[state_key]
+            logger.warning(f"未知状态: {current_state}，重新开始")
+            await self._clear_session_state(state_key)
             return await self._step1_skill_matching(user_input, user_id, conversation_id, session_id)
 
     async def _step1_skill_matching(
@@ -273,6 +337,10 @@ class AgentRuntime:
         - 给出可以使用的 skill 列表
         - 如果没有匹配到任何 skill，则给出兜底方法（找人工处理）
         """
+        # 特殊指令处理
+        if "查看技能" in user_input or "技能列表" in user_input or "帮助" in user_input:
+            return self._show_all_skills(user_id, conversation_id, session_id)
+
         # 匹配技能（简单的关键词匹配）
         matched_skills = self._match_skills(user_input)
 
@@ -309,13 +377,13 @@ class AgentRuntime:
 
         # 保存会话状态
         state_key = f"{user_id}:{session_id or 'default'}"
-        self._session_states[state_key] = {
+        await self._set_session_state(state_key, {
             "state": "skill_selection",
             "matched_skills": matched_skills,
             "user_input": user_input,
             "memory_context": memory_context,
             "timestamp": datetime.now().isoformat()
-        }
+        })
 
         return {
             "response": response,
@@ -345,12 +413,15 @@ class AgentRuntime:
         """
         state_key = f"{user_id}:{session_id or 'default'}"
 
-        # 如果当前状态是 skill_selection，说明用户刚选择了技能
+        # 如果当前状态是 skill_selection，说明用户刚选择了技能（在 _continue_flow 中已验证）
         if session_state.get("state") == "skill_selection":
+            # 获取用户选择的技能
             selected_skill_name = self._parse_skill_selection(user_input, session_state.get("matched_skills"))
 
             if not selected_skill_name:
-                # 用户没有选择有效技能，重新提示
+                # 这个分支理论上不应该执行，因为 _continue_flow 中已经处理了
+                logger.error(f"逻辑错误: selected_skill_name 为空，但仍然进入了参数收集")
+                await self._clear_session_state(state_key)
                 return await self._step1_skill_matching(user_input, user_id, conversation_id, session_id)
 
             # 用户选择了技能，开始收集参数
@@ -363,17 +434,30 @@ class AgentRuntime:
             session_state["slots"] = slots
             session_state["collected_parameters"] = {}
             session_state["current_slot_index"] = 0
-            self._session_states[state_key] = session_state
+            await self._set_session_state(state_key, session_state)
 
             # 询问第一个参数
             current_slot = slots[0]
             response = f"好的，我将使用 {selected_skill_name} 技能帮您处理。\n\n"
             response += f"{current_slot.get('prompt', '')}\n"
             if current_slot.get("options"):
-                options_text = "\n".join([
-                    f"- {opt} - {desc}" if isinstance(opt, str) else f"- {opt}"
-                    for opt, desc in current_slot.get("options", {}).items()
-                ])
+                options = current_slot.get("options", [])
+                # 兼容 options 的两种格式：字典或列表
+                if isinstance(options, dict):
+                    options_text = "\n".join([
+                        f"- {opt} - {desc}" if desc else f"- {opt}"
+                        for opt, desc in options.items()
+                    ])
+                elif isinstance(options, list):
+                    if len(options) > 0 and len(options) % 2 == 0:
+                        options_text = "\n".join([
+                            f"- {options[i]} - {options[i+1]}"
+                            for i in range(0, len(options), 2)
+                        ])
+                    else:
+                        options_text = "\n".join([f"- {opt}" for opt in options])
+                else:
+                    options_text = str(options)
                 response += f"\n可选选项：\n{options_text}"
 
             return {
@@ -408,21 +492,38 @@ class AgentRuntime:
             if not next_slot.get("required", True):
                 session_state["collected_parameters"] = collected_parameters
                 session_state["current_slot_index"] = current_slot_index
-                self._session_states[state_key] = session_state
+                await self._set_session_state(state_key, session_state)
                 return await self._step2_parameter_collection("跳过", user_id, conversation_id, session_id, session_state)
 
             # 询问下一个参数
             response = next_slot.get("prompt", "")
             if next_slot.get("options"):
-                options_text = "\n".join([
-                    f"- {opt} - {desc}" if isinstance(opt, str) else f"- {opt}"
-                    for opt, desc in next_slot.get("options", {}).items()
-                ])
+                options = next_slot.get("options", [])
+                # 兼容 options 的两种格式：字典或列表
+                if isinstance(options, dict):
+                    options_text = "\n".join([
+                        f"- {opt} - {desc}" if desc else f"- {opt}"
+                        for opt, desc in options.items()
+                    ])
+                elif isinstance(options, list):
+                    # 列表可能是简单列表 ["opt1", "opt2"]
+                    # 或交替列表 ["opt1", "desc1", "opt2", "desc2"]
+                    if len(options) > 0 and len(options) % 2 == 0:
+                        # 可能是交替列表，尝试配对
+                        options_text = "\n".join([
+                            f"- {options[i]} - {options[i+1]}"
+                            for i in range(0, len(options), 2)
+                        ])
+                    else:
+                        # 简单列表
+                        options_text = "\n".join([f"- {opt}" for opt in options])
+                else:
+                    options_text = str(options)
                 response += f"\n可选选项：\n{options_text}"
 
             session_state["collected_parameters"] = collected_parameters
             session_state["current_slot_index"] = current_slot_index
-            self._session_states[state_key] = session_state
+            await self._set_session_state(state_key, session_state)
 
             return {
                 "response": response,
@@ -438,7 +539,7 @@ class AgentRuntime:
             # 所有参数收集完成，进入确认阶段
             session_state["state"] = "awaiting_confirmation"
             session_state["collected_parameters"] = collected_parameters
-            self._session_states[state_key] = session_state
+            await self._set_session_state(state_key, session_state)
 
             # 生成确认信息
             params_text = "\n".join([
@@ -479,13 +580,13 @@ class AgentRuntime:
 
         # 执行技能
         try:
-            result = await self.skill_orchestrator.execute_skill(
+            result = await self.skill_orchestrator.execute_single(
                 selected_skill,
                 collected_parameters
             )
 
             # 清除会话状态
-            del self._session_states[state_key]
+            await self._clear_session_state(state_key)
 
             # 生成结果响应
             response = "✅ 执行完成！\n\n"
@@ -634,6 +735,35 @@ class AgentRuntime:
                 matched[skill_name] = metadata
 
         return matched
+
+    def _show_all_skills(self, user_id: str, conversation_id: str = None, session_id: str = None) -> Dict[str, Any]:
+        """显示所有可用技能"""
+        skills = self.skill_registry.skill_metadata
+
+        if not skills:
+            response = "当前系统中没有可用的技能。"
+        else:
+            skill_list_text = "\n".join([
+                f"{i+1}. {name}\n   {metadata.get('description', '无描述')}\n   分类: {metadata.get('category', '未分类')}"
+                for i, (name, metadata) in enumerate(skills.items())
+            ])
+
+            response = "系统支持以下技能：\n\n"
+            response += skill_list_text
+            response += "\n\n请告诉我您想使用哪个技能（输入技能名称或编号），或描述您的需求，我会为您推荐合适的技能。"
+
+        return {
+            "response": response,
+            "conversation_id": conversation_id,
+            "session_id": session_id,
+            "mode": "dialogue",
+            "state": "skill_selection",
+            "available_skills": [
+                {"name": name, "description": metadata.get("description", "")}
+                for name, metadata in skills.items()
+            ],
+            "next_action": "user_select_skill"
+        }
 
     def _parse_skill_selection(self, user_input: str, matched_skills: Dict[str, Dict]) -> str | None:
         """解析用户选择的技能"""

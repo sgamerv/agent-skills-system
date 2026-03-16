@@ -152,6 +152,9 @@ async def chat(request: ChatRequest) -> ChatResponse:
     """
     agent: AgentRuntime = app.state.agent
 
+    # 记录请求信息
+    logger.info(f"收到聊天请求: user_id={request.user_id}, session_id={request.session_id}, user_input={request.user_input[:50]}")
+
     try:
         result = await agent.chat(
             user_input=request.user_input,
