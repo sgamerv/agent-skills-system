@@ -45,6 +45,7 @@ export interface ChatResponse {
   feedback_required?: boolean
   feedback?: any
   next_action?: string
+  missing_params?: string[]
 }
 
 // 会话接口

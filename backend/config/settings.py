@@ -37,6 +37,16 @@ class Settings(BaseSettings):
     XINFERENCE_MODEL_UID: str = "qwen2.5-7b-instruct"
     EMBEDDING_MODEL_UID: str = "bge-large-zh-v1.5"
 
+    # 智谱AI配置
+    ZHIPUAI_API_KEY: str = "f71a7b9f11b74a5d981e0ce613e9890d.sscNNfODNvcf6XcY"
+    ZHIPUAI_MODEL: str = "glm-5-turbo"
+    ZHIPUAI_TEMPERATURE: float = 0.7
+    ZHIPUAI_MAX_TOKENS: int = 8000  # 增加到8000以支持更长的JSON响应
+
+    # LLM Skill Router配置
+    ENABLE_LLM_SKILL_ROUTER: bool = True
+    LLM_ROUTER_FALLBACK_TO_RULES: bool = True
+
     # 数据库配置
     REDIS_URL: str = "redis://localhost:6379/0"
     DATABASE_URL: str = "postgresql://user:password@localhost:5432/agent_skills"

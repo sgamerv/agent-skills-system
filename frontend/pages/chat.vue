@@ -217,10 +217,18 @@ const sendMessage = async () => {
       session_id: currentSessionId.value
     })
 
+    // 根据状态显示不同的消息样式
+    const messageContent = response.response
+    const isWaitingInput = response.state === 'workflow_execution' && response.next_action === 'collect_parameters'
+
     // 添加 AI 回复
     messages.value.push({
       role: 'assistant',
-      content: response.response
+      content: messageContent,
+      state: response.state,
+      nextAction: response.next_action,
+      isWaitingInput,
+      missingParams: response.missing_params || []
     })
   } catch (err: any) {
     console.error('发送消息失败:', err)
@@ -373,11 +381,11 @@ onMounted(() => {
           <div
             v-for="(msg, index) in messages"
             :key="index"
-            :class="['message', msg.role]"
+            :class="['message', msg.role, { 'waiting-input': msg.isWaitingInput, 'failed': msg.state === 'failed' }]"
           >
             <UAvatar
               v-if="msg.role === 'assistant'"
-              icon="i-heroicons-sparkles"
+              :icon="msg.isWaitingInput ? 'i-heroicons-information-circle' : 'i-heroicons-sparkles'"
               size="sm"
               class="message-avatar"
             />
@@ -389,6 +397,10 @@ onMounted(() => {
             />
             <div class="message-content">
               {{ msg.content }}
+              <div v-if="msg.isWaitingInput && msg.missingParams && msg.missingParams.length > 0" class="missing-params-info">
+                <UIcon name="i-heroicons-exclamation-triangle" />
+                <span>缺少参数: {{ msg.missingParams.join(', ') }}</span>
+              </div>
             </div>
           </div>
 
@@ -684,6 +696,32 @@ onMounted(() => {
   border: 1px solid rgb(var(--color-gray-200));
   border-bottom-left-radius: 0.375rem;
   font-weight: 400;
+}
+
+/* 等待输入状态的消息样式 */
+.message.assistant.waiting-input .message-content {
+  background: linear-gradient(135deg, rgb(var(--color-amber-50)) 0%, rgb(var(--color-amber-100)) 100%);
+  border-color: rgb(var(--color-amber-300));
+}
+
+/* 失败状态的消息样式 */
+.message.assistant.failed .message-content {
+  background: linear-gradient(135deg, rgb(var(--color-red-50)) 0%, rgb(var(--color-red-100)) 100%);
+  border-color: rgb(var(--color-red-300));
+}
+
+/* 缺失参数信息 */
+.missing-params-info {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  background: rgba(255, 255, 255, 0.5);
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  color: rgb(var(--color-amber-600));
+  font-weight: 500;
 }
 
 .loading-content {

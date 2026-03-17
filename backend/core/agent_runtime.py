@@ -30,6 +30,13 @@ from backend.core.skill_orchestrator import (
     SkillOrchestrator,
     SkillCall,
 )
+# 新增：集成LLM router和natural language workflow
+from backend.llm.zhipuai_client import ZhipuAIClient
+from backend.core.llm_skill_router import LLMSkillRouter
+from backend.core.natural_language_workflow import (
+    NaturalLanguageWorkflowExecutor,
+    MCPToolExecutor,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -126,6 +133,39 @@ class AgentRuntime:
 
         # Redis客户端用于持久化session_state
         self.redis_client = redis_client
+
+        # 初始化LLM组件（如果配置了智谱AI）
+        if settings.ENABLE_LLM_SKILL_ROUTER and settings.ZHIPUAI_API_KEY:
+            logger.info("初始化LLM Skill Router...")
+            self.zhipuai_client = ZhipuAIClient(
+                api_key=settings.ZHIPUAI_API_KEY,
+                model=settings.ZHIPUAI_MODEL,
+                temperature=settings.ZHIPUAI_TEMPERATURE,
+                max_tokens=settings.ZHIPUAI_MAX_TOKENS
+            )
+            self.llm_router = LLMSkillRouter(
+                self.zhipuai_client,
+                self.skill_registry
+            )
+
+            # 初始化MCP工具执行器
+            self.mcp_executor = MCPToolExecutor()
+
+            # 初始化自然语言workflow执行器
+            self.workflow_executor = NaturalLanguageWorkflowExecutor(
+                llm_client=self.zhipuai_client,
+                mcp_executor=self.mcp_executor,
+                skill_orchestrator=self.skill_orchestrator,
+                skill_registry=self.skill_registry
+            )
+
+            logger.info("LLM组件初始化完成")
+        else:
+            self.zhipuai_client = None
+            self.llm_router = None
+            self.mcp_executor = None
+            self.workflow_executor = None
+            logger.info("未配置LLM Skill Router，使用传统模式")
 
     async def _get_session_state(self, state_key: str) -> Dict[str, Any] | None:
         """从Redis或内存获取会话状态"""
@@ -287,7 +327,17 @@ class AgentRuntime:
         state_key = f"{user_id}:{session_id or 'default'}"
         current_state = session_state.get("state")
 
-        if current_state == "skill_selection":
+        if current_state == "workflow_execution":
+            # 自然语言workflow执行中
+            return await self._continue_workflow_execution(
+                user_input,
+                user_id,
+                conversation_id,
+                session_id,
+                session_state
+            )
+
+        elif current_state == "skill_selection":
             # 用户处于技能选择状态，尝试解析用户选择的技能
             selected_skill = self._parse_skill_selection(user_input, session_state.get("matched_skills"))
 
@@ -322,6 +372,113 @@ class AgentRuntime:
             await self._clear_session_state(state_key)
             return await self._step1_skill_matching(user_input, user_id, conversation_id, session_id)
 
+    async def _continue_workflow_execution(
+        self,
+        user_input: str,
+        user_id: str,
+        conversation_id: str = None,
+        session_id: str = None,
+        session_state: Dict = None
+    ) -> Dict[str, Any]:
+        """继续自然语言workflow执行"""
+        if not self.workflow_executor:
+            logger.error("Workflow executor未初始化")
+            return await self._step1_skill_matching(user_input, user_id, conversation_id, session_id)
+
+        try:
+            # 恢复执行状态
+            from backend.core.natural_language_workflow import ExecutionState, WorkflowPlan
+
+            # 重建ExecutionState
+            plan = WorkflowPlan(
+                steps=[],
+                required_params=[],
+                extracted_params={},
+                missing_params=session_state.get("execution_state", {}).get("missing_params", [])
+            )
+
+            execution_state = ExecutionState(
+                skill_name=session_state.get("skill_name", ""),
+                workflow_text=session_state.get("workflow_text", ""),
+                user_input=user_input,
+                plan=plan,
+                current_step=session_state.get("execution_state", {}).get("current_step", 0),
+                collected_params=session_state.get("execution_state", {}).get("collected_params", {}),
+                missing_params=session_state.get("execution_state", {}).get("missing_params", []),
+                execution_results=session_state.get("execution_state", {}).get("execution_results", {}),
+                is_first_execution=False  # 恢复执行时不是首次执行
+            )
+
+            # 继续执行workflow
+            workflow_result = await self.workflow_executor.execute(
+                skill_name=session_state.get("skill_name"),
+                workflow_text=session_state.get("workflow_text"),
+                user_input=user_input,
+                context={},
+                execution_state=execution_state
+            )
+
+            # 处理workflow执行结果
+            if workflow_result.status == "waiting_input":
+                # 需要用户提供参数
+                state_key = f"{user_id}:{session_id or 'default'}"
+                await self._set_session_state(state_key, {
+                    "state": "workflow_execution",
+                    "skill_name": session_state.get("skill_name"),
+                    "workflow_text": session_state.get("workflow_text"),
+                    "execution_state": workflow_result.execution_state.to_dict(),
+                    "timestamp": datetime.now().isoformat()
+                })
+
+                return {
+                    "response": workflow_result.message,
+                    "conversation_id": conversation_id,
+                    "session_id": session_id,
+                    "mode": "dialogue",
+                    "state": "workflow_execution",
+                    "current_skill": session_state.get("skill_name"),
+                    "collected_parameters": workflow_result.execution_state.collected_params,
+                    "next_action": "collect_parameters",
+                    "missing_params": workflow_result.missing_params if hasattr(workflow_result, 'missing_params') else []
+                }
+
+            elif workflow_result.status == "completed":
+                # 执行完成
+                await self._clear_session_state(f"{user_id}:{session_id or 'default'}")
+
+                return {
+                    "response": f"执行完成！\n\n{json.dumps(workflow_result.output, ensure_ascii=False, indent=2)}",
+                    "conversation_id": conversation_id,
+                    "session_id": session_id,
+                    "mode": "direct",
+                    "state": "completed",
+                    "execution_result": workflow_result.output
+                }
+
+            elif workflow_result.status == "failed":
+                # 执行失败
+                await self._clear_session_state(f"{user_id}:{session_id or 'default'}")
+
+                return {
+                    "response": f"执行失败：{workflow_result.error}",
+                    "conversation_id": conversation_id,
+                    "session_id": session_id,
+                    "mode": "direct",
+                    "state": "failed",
+                    "execution_result": None
+                }
+
+        except Exception as e:
+            logger.error(f"继续workflow执行失败: {e}")
+            await self._clear_session_state(f"{user_id}:{session_id or 'default'}")
+            return {
+                "response": f"执行出错：{str(e)}",
+                "conversation_id": conversation_id,
+                "session_id": session_id,
+                "mode": "direct",
+                "state": "failed"
+            }
+
     async def _step1_skill_matching(
         self,
         user_input: str,
@@ -332,15 +489,216 @@ class AgentRuntime:
     ) -> Dict[str, Any]:
         """
         第一步：技能匹配与推荐
-        - 通过用户输入，查找匹配的 skill
-        - 组织语言向用户说明原因
-        - 给出可以使用的 skill 列表
-        - 如果没有匹配到任何 skill，则给出兜底方法（找人工处理）
+        - 使用LLM router进行智能匹配
+        - 如果匹配到技能，使用natural language workflow执行
+        - 如果没有匹配到任何 skill，则给出兜底方法
         """
         # 特殊指令处理
         if "查看技能" in user_input or "技能列表" in user_input or "帮助" in user_input:
             return self._show_all_skills(user_id, conversation_id, session_id)
 
+        # 如果配置了LLM router，使用新的流程
+        if self.workflow_executor:
+            return await self._execute_with_natural_language_workflow(
+                user_input,
+                user_id,
+                conversation_id,
+                session_id,
+                memory_context
+            )
+
+        # 降级：使用旧的规则匹配逻辑
+        return await self._step1_skill_matching_legacy(
+            user_input,
+            user_id,
+            conversation_id,
+            session_id,
+            memory_context
+        )
+
+    async def _execute_with_natural_language_workflow(
+        self,
+        user_input: str,
+        user_id: str,
+        conversation_id: str = None,
+        session_id: str = None,
+        memory_context: Dict = None
+    ) -> Dict[str, Any]:
+        """使用自然语言workflow执行"""
+        try:
+            # 1. 使用LLM router匹配技能
+            context = {
+                "conversation_history": [],
+                "session_state": {}
+            }
+
+            route_result = await self.llm_router.route(user_input, context)
+
+            # 处理特殊动作
+            if route_result["action"] == "view_skills":
+                return self._show_all_skills(user_id, conversation_id, session_id)
+
+            elif route_result["action"] == "help":
+                # 使用LLM router的帮助响应
+                return {
+                    "response": "欢迎使用智能助手系统！\n\n我可以帮您：\n- 执行各种技能任务（数据分析、可视化、知识问答等）\n- 查看可用的技能列表\n- 提供操作帮助\n\n使用方法：\n1. 直接描述您的需求，我会自动匹配最合适的技能\n2. 输入\"查看技能\"查看所有可用技能\n3. 在执行过程中，根据提示提供所需信息\n4. 随时输入\"取消\"可以中断当前操作\n\n有什么我可以帮助您的吗？",
+                    "conversation_id": conversation_id,
+                    "session_id": session_id,
+                    "mode": "direct",
+                    "state": "completed"
+                }
+
+            elif route_result["action"] == "no_match":
+                response = "很抱歉，我没有找到能够处理您请求的技能。\n\n"
+                response += "建议您：\n"
+                response += "- 尝试用更具体的描述重新提问\n"
+                response += "- 输入\"查看技能\"查看可用技能列表\n\n"
+                return {
+                    "response": response,
+                    "conversation_id": conversation_id,
+                    "session_id": session_id,
+                    "mode": "dialogue",
+                    "state": "escalated",
+                    "available_skills": None,
+                    "next_action": "wait_or_escalate"
+                }
+
+            elif route_result["action"] == "chat":
+                # 普通聊天，使用LLM直接回复
+                return {
+                    "response": route_result.get("message", "请问您需要什么帮助？"),
+                    "conversation_id": conversation_id,
+                    "session_id": session_id,
+                    "mode": "direct",
+                    "state": "completed"
+                }
+
+            elif route_result["action"] == "execute_skill":
+                skill_name = route_result["skill_name"]
+                logger.info(f"LLM router匹配到技能: {skill_name}")
+
+                # 2. 读取skill的workflow定义
+                skill_md_path = f"{settings.SKILLS_DIR}/{skill_name}/SKILL.md"
+                try:
+                    with open(skill_md_path, 'r', encoding='utf-8') as f:
+                        skill_content = f.read()
+
+                    # 提取workflow部分（## 执行步骤之后的内容）
+                    workflow_start = skill_content.find("## 执行步骤")
+
+                    if workflow_start == -1:
+                        # 没有workflow定义，直接执行skill
+                        result = await self.skill_orchestrator.execute_single(
+                            skill_name,
+                            route_result.get("intent_parameters", {}),
+                            {}
+                        )
+
+                        if result.success:
+                            return {
+                                "response": f"已执行技能：{skill_name}\n\n{str(result.output)}",
+                                "conversation_id": conversation_id,
+                                "session_id": session_id,
+                                "mode": "direct",
+                                "state": "completed",
+                                "execution_result": result.output
+                            }
+                        else:
+                            return {
+                                "response": f"执行失败：{result.error}",
+                                "conversation_id": conversation_id,
+                                "session_id": session_id,
+                                "mode": "direct",
+                                "state": "failed",
+                                "execution_result": result.output
+                            }
+
+                    workflow_text = skill_content[workflow_start:]
+
+                    # 3. 执行natural language workflow
+                    workflow_result = await self.workflow_executor.execute(
+                        skill_name=skill_name,
+                        workflow_text=workflow_text,
+                        user_input=user_input,
+                        context={}
+                    )
+
+                    # 4. 处理workflow执行结果
+                    if workflow_result.status == "waiting_input":
+                        # 需要用户提供参数
+                        state_key = f"{user_id}:{session_id or 'default'}"
+                        await self._set_session_state(state_key, {
+                            "state": "workflow_execution",
+                            "skill_name": skill_name,
+                            "workflow_text": workflow_text,
+                            "execution_state": workflow_result.execution_state.to_dict(),
+                            "timestamp": datetime.now().isoformat()
+                        })
+
+                        return {
+                            "response": workflow_result.message,
+                            "conversation_id": conversation_id,
+                            "session_id": session_id,
+                            "mode": "dialogue",
+                            "state": "workflow_execution",
+                            "current_skill": skill_name,
+                            "collected_parameters": workflow_result.execution_state.collected_params,
+                            "next_action": "collect_parameters",
+                            "missing_params": workflow_result.missing_params
+                        }
+
+                    elif workflow_result.status == "completed":
+                        # 执行完成
+                        return {
+                            "response": f"执行完成！\n\n{json.dumps(workflow_result.output, ensure_ascii=False, indent=2)}",
+                            "conversation_id": conversation_id,
+                            "session_id": session_id,
+                            "mode": "direct",
+                            "state": "completed",
+                            "execution_result": workflow_result.output
+                        }
+
+                    elif workflow_result.status == "failed":
+                        # 执行失败
+                        return {
+                            "response": f"执行失败：{workflow_result.error}",
+                            "conversation_id": conversation_id,
+                            "session_id": session_id,
+                            "mode": "direct",
+                            "state": "failed",
+                            "execution_result": None
+                        }
+
+                except FileNotFoundError:
+                    logger.error(f"Skill文件不存在: {skill_md_path}")
+                    return {
+                        "response": f"未找到技能：{skill_name}",
+                        "conversation_id": conversation_id,
+                        "session_id": session_id,
+                        "mode": "dialogue",
+                        "state": "failed"
+                    }
+
+        except Exception as e:
+            logger.error(f"Natural language workflow执行失败: {e}")
+            # 降级到传统模式
+            return await self._step1_skill_matching_legacy(
+                user_input,
+                user_id,
+                conversation_id,
+                session_id,
+                memory_context
+            )
+
+    async def _step1_skill_matching_legacy(
+        self,
+        user_input: str,
+        user_id: str,
+        conversation_id: str = None,
+        session_id: str = None,
+        memory_context: Dict = None
+    ) -> Dict[str, Any]:
+        """传统技能匹配（降级方案）"""
         # 匹配技能（简单的关键词匹配）
         matched_skills = self._match_skills(user_input)
 

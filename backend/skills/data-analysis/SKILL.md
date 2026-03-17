@@ -1,58 +1,26 @@
 ---
 name: data-analysis
 description: 数据分析技能,支持 CSV/Excel 数据处理和统计分析
-version: 1.0.0
+version: 2.0.0
 author: Agent Team
 category: analysis
 tags: [data, analysis, statistics]
-requires: [pandas, numpy]
-provides: [analysis-result]
-can_call: [visualization, knowledge-qa-expert]
-
-# Slot 定义
-slots:
-  - name: data_file
-    type: file
-    required: true
-    description: "需要分析的数据文件(CSV/Excel格式)"
-    prompt: "请提供需要分析的数据文件路径"
-    validation:
-      - file_extension: [".csv", ".xlsx", ".xls"]
-      - max_size: "100MB"
-
-  - name: analysis_type
-    type: enum
-    required: true
-    description: "分析类型"
-    prompt: "请选择分析类型"
-    options:
-      - descriptive: "描述性统计 - 计算均值、标准差、中位数等统计指标"
-      - trend: "趋势分析 - 分析数据随时间的变化趋势"
-      - correlation: "相关性分析 - 分析变量之间的相关性"
-
-  - name: target_column
-    type: string
-    required: false
-    description: "需要重点关注的目标列名"
-    prompt: "请指定需要重点分析的列名(可选)"
-    depends_on: [data_file]
-
-  - name: output_format
-    type: enum
-    required: false
-    description: "输出格式"
-    prompt: "请选择输出格式"
-    options:
-      - json: "JSON 格式 - 结构化数据输出"
-      - csv: "CSV 文件 - 表格数据输出"
-      - summary: "摘要报告 - 文本报告格式"
-    default_value: "json"
+mcp_tools: []
 ---
 
 # 数据分析技能
 
-## 技能目标
-对结构化数据进行分析,生成统计报告,可调用其他 Skills 进行可视化或知识查询。
+## 执行步骤
+1. 读取用户提供的{data_file}数据文件（支持CSV/Excel格式，最大100MB）
+2. 检查数据质量，处理缺失值和异常值，显示数据基本信息（行数、列数、列名等）
+3. 根据{analysis_type}执行相应的分析：
+   - 描述性统计：计算均值、标准差、中位数等统计指标
+   - 趋势分析：分析数据随时间的变化趋势，计算增长率、移动平均等
+   - 相关性分析：计算变量间相关系数，识别强相关和弱相关变量
+4. 如果用户指定了{target_column}，则重点分析该列的数据特征
+5. 根据{output_format}生成结果（JSON/CSV/摘要报告），默认为JSON
+6. 如果用户需要可视化，调用visualization skill生成图表
+7. 返回分析结果给用户
 
 ## 使用场景
 - 分析销售数据、用户数据等结构化数据
@@ -60,38 +28,11 @@ slots:
 - 数据趋势分析和相关性分析
 - 为可视化技能提供数据支持
 
-## 执行步骤
-
-### 步骤 1: 数据加载
-1. 读取用户指定的数据文件(CSV/Excel)
-2. 验证数据格式和完整性
-3. 显示数据基本信息(行数、列数、列名等)
-
-### 步骤 2: 数据预处理
-1. 处理缺失值
-2. 数据类型转换
-3. 数据清洗和规范化
-
-### 步骤 3: 数据分析
-根据分析类型执行相应的分析:
-
-#### 描述性统计
-- 计算数值列的均值、标准差、最小值、最大值、中位数
-- 计算分类列的频数统计
-- 生成数据摘要表
-
-#### 趋势分析
-- 按时间维度聚合数据
-- 计算增长率、移动平均等指标
-- 识别趋势和周期性模式
-
-#### 相关性分析
-- 计算变量间的相关系数矩阵
-- 识别强相关和弱相关变量
-- 生成相关性热力图数据
-
-### 步骤 4: 结果输出
-根据用户选择的输出格式生成结果。
+## 参数说明
+- data_file: 数据文件路径（必填）
+- analysis_type: 分析类型（必填），可选值：描述性统计、趋势分析、相关性分析
+- target_column: 目标列名（可选），如果未指定则分析所有列
+- output_format: 输出格式（可选），默认为JSON，可选值：json、csv、summary
 
 ## 输出格式
 
@@ -117,28 +58,6 @@ slots:
 
 ### 摘要报告格式
 生成包含图表说明和关键发现的文本报告。
-
-## 可选的 Skill 调用
-
-### 调用 visualization Skill
-当用户需要可视化结果时:
-```
-Skill调用: visualization
-输入参数:
-  - data_type: "chart"
-  - data: 分析结果数据
-  - chart_type: 图表类型
-期望输出: 图表文件路径
-```
-
-### 调用 knowledge-qa-expert Skill
-当分析结果需要额外知识支持时:
-```
-Skill调用: knowledge-qa-expert
-输入参数:
-  - query: 基于分析结果生成的查询问题
-期望输出: 相关知识解释
-```
 
 ## 注意事项
 - 数据文件大小限制为 100MB
