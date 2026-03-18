@@ -1,6 +1,6 @@
 """LLM客户端工厂模块"""
 import logging
-from typing import Optional
+from typing import Optional, Union
 from langchain_openai import ChatOpenAI
 
 from backend.config.settings import settings
@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 class LLMProviderFactory:
-    """LLM客户端工厂，用于根据配置创建不同的LLM客户端"""
+    """LLM客户端工厂，用于根据配置创建统一的LLM客户端"""
 
     @staticmethod
     def create_zhipuai_client() -> Optional[ZhipuAIClient]:
@@ -60,36 +60,33 @@ class LLMProviderFactory:
             return None
 
     @staticmethod
-    def create_llm_client() -> tuple[Optional[ChatOpenAI], Optional[ZhipuAIClient]]:
+    def create_llm() -> Optional[Union[ZhipuAIClient, ChatOpenAI]]:
         """
-        根据配置创建LLM客户端
+        根据配置创建统一的LLM客户端
+
+        所有组件（Router、Workflow、对话管理等）都使用同一个LLM客户端。
 
         Returns:
-            tuple: (langchain_client, zhipuai_client)
-                - langchain_client: LangChain兼容的客户端（用于Xinference）
-                - zhipuai_client: 智谱AI客户端（用于ZhipuAI）
+            ZhipuAIClient 或 ChatOpenAI: LLM客户端
         """
         provider = settings.LLM_PROVIDER.lower()
 
         if provider == "zhipuai":
             logger.info("使用智谱AI作为LLM提供者")
-            zhipuai_client = LLMProviderFactory.create_zhipuai_client()
-            if zhipuai_client is None:
-                logger.error("智谱AI客户端创建失败")
-                return None, None
-            return None, zhipuai_client
+            client = LLMProviderFactory.create_zhipuai_client()
+            if client is None:
+                raise RuntimeError("智谱AI客户端创建失败，请检查API密钥配置")
+            return client
 
         elif provider == "xinference":
             logger.info("使用Xinference作为LLM提供者")
-            xinference_client = LLMProviderFactory.create_xinference_client()
-            if xinference_client is None:
-                logger.error("Xinference客户端创建失败")
-                return None, None
-            return xinference_client, None
+            client = LLMProviderFactory.create_xinference_client()
+            if client is None:
+                raise RuntimeError("Xinference客户端创建失败，请检查服务配置")
+            return client
 
         else:
-            logger.error(f"未知的LLM提供者: {provider}，支持的提供者: 'xinference', 'zhipuai'")
-            return None, None
+            raise ValueError(f"未知的LLM提供者: {provider}，支持的提供者: 'xinference', 'zhipuai'")
 
     @staticmethod
     def test_connection() -> bool:
@@ -102,14 +99,9 @@ class LLMProviderFactory:
         provider = settings.LLM_PROVIDER.lower()
         logger.info(f"测试LLM连接，提供者: {provider}")
 
-        if provider == "zhipuai":
-            client = LLMProviderFactory.create_zhipuai_client()
+        try:
+            client = LLMProviderFactory.create_llm()
             return client is not None
-
-        elif provider == "xinference":
-            client = LLMProviderFactory.create_xinference_client()
-            return client is not None
-
-        else:
-            logger.error(f"未知的LLM提供者: {provider}")
+        except Exception as e:
+            logger.error(f"LLM连接测试失败: {e}")
             return False

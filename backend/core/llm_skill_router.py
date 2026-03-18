@@ -1,7 +1,7 @@
 """基于LLM的Skill路由器"""
 import json
 import logging
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Union
 from dataclasses import dataclass
 from enum import Enum
 
@@ -9,6 +9,9 @@ from backend.llm.zhipuai_client import ZhipuAIClient
 from backend.core.skill_manager import SkillRegistry
 
 logger = logging.getLogger(__name__)
+
+# LLM客户端类型
+LLMClientType = Union[ZhipuAIClient, Any]  # Any 用于兼容 LangChain ChatOpenAI
 
 
 class IntentType(Enum):
@@ -70,7 +73,7 @@ class IntentAnalyzer:
 
 返回格式必须是有效的JSON。"""
 
-    def __init__(self, llm_client: ZhipuAIClient):
+    def __init__(self, llm_client: LLMClientType):
         self.llm_client = llm_client
 
     async def analyze(
@@ -217,7 +220,7 @@ class SkillMatcher:
 
 返回格式必须是有效的JSON。"""
 
-    def __init__(self, llm_client: ZhipuAIClient):
+    def __init__(self, llm_client: LLMClientType):
         self.llm_client = llm_client
 
     async def match(
@@ -507,7 +510,7 @@ class LLMSkillRouter:
 
     def __init__(
         self,
-        llm_client: ZhipuAIClient,
+        llm_client: LLMClientType,
         skill_registry: SkillRegistry
     ):
         """

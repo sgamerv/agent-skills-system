@@ -17,10 +17,7 @@ mcp_tools: []
    - 描述性统计：计算均值、标准差、中位数等统计指标
    - 趋势分析：分析数据随时间的变化趋势，计算增长率、移动平均等
    - 相关性分析：计算变量间相关系数，识别强相关和弱相关变量
-4. 如果用户指定了{target_column}，则重点分析该列的数据特征
-5. 根据{output_format}生成结果（JSON/CSV/摘要报告），默认为JSON
-6. 如果用户需要可视化，调用visualization skill生成图表
-7. 返回分析结果给用户
+4. 调用scripts/main.py脚本完成数据输出
 
 ## 使用场景
 - 分析销售数据、用户数据等结构化数据
@@ -34,33 +31,47 @@ mcp_tools: []
 - target_column: 目标列名（可选），如果未指定则分析所有列
 - output_format: 输出格式（可选），默认为JSON，可选值：json、csv、summary
 
-## 输出格式
+## 脚本调用
 
-### JSON 格式
-```json
-{
-  "statistics": {
-    "mean": 123.45,
-    "std": 45.67,
-    "min": 10.0,
-    "max": 200.0,
-    "median": 115.5
-  },
-  "insights": [
-    "数据均值为 123.45,标准差为 45.67",
-    "数据分布较为均匀,无显著异常值"
-  ]
-}
+### 脚本路径
+```
+scripts/main.py
 ```
 
-### CSV 格式
-导出包含统计结果的 CSV 文件。
+### 执行函数
+```python
+async def execute(
+    data_file: str,
+    analysis_type: str,
+    target_column: str = None,
+    output_format: str = "json",
+    **kwargs
+) -> dict
+```
 
-### 摘要报告格式
-生成包含图表说明和关键发现的文本报告。
+### 参数映射
+| Workflow 参数 | 脚本参数 | 类型 | 必填 | 说明 |
+|--------------|---------|------|-----|------|
+| {data_file} | data_file | str | 是 | 数据文件路径 |
+| {analysis_type} | analysis_type | str | 是 | 分析类型 |
+| {target_column} | target_column | str | 否 | 目标列名 |
+| {output_format} | output_format | str | 否 | 输出格式，默认 json |
 
-## 注意事项
-- 数据文件大小限制为 100MB
-- 支持的文件格式: CSV, XLSX, XLS
-- 对于大数据集,建议先进行采样分析
-- 确保数据文件路径正确可访问
+### 返回格式
+```json
+{
+  "success": true,
+  "message": "数据分析技能执行验证成功",
+  "tool_info": {
+    "name": "data-analysis",
+    "script_path": "/path/to/scripts/main.py",
+    "script_directory": "/path/to/scripts"
+  },
+  "parameters": {
+    "data_file": "sales.csv",
+    "analysis_type": "描述性统计",
+    "target_column": "revenue",
+    "output_format": "json"
+  }
+}
+```

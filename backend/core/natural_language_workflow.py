@@ -1,7 +1,7 @@
 """基于自然语言的Workflow执行器"""
 import json
 import logging
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Union
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -10,6 +10,9 @@ from backend.core.skill_orchestrator import SkillOrchestrator
 from backend.core.skill_manager import SkillRegistry
 
 logger = logging.getLogger(__name__)
+
+# LLM客户端类型
+LLMClientType = Union[ZhipuAIClient, Any]  # Any 用于兼容 LangChain ChatOpenAI
 
 
 class StepStatus(Enum):
@@ -87,7 +90,8 @@ class ExecutionState:
             "collected_params": self.collected_params,
             "missing_params": self.missing_params,
             "execution_results": self.execution_results,
-            "is_first_execution": self.is_first_execution
+            "is_first_execution": self.is_first_execution,
+            "plan": self.plan.to_dict()
         }
 
 
@@ -152,13 +156,14 @@ class NaturalLanguageWorkflowParser:
 
 返回格式必须是有效的JSON。"""
 
-    def __init__(self, llm_client: ZhipuAIClient):
+    def __init__(self, llm_client: LLMClientType):
         self.llm_client = llm_client
 
     async def parse(
         self,
         workflow_text: str,
-        user_input: str
+        user_input: str,
+        skill_name: str = ""
     ) -> WorkflowPlan:
         """
         解析自然语言workflow
@@ -166,6 +171,7 @@ class NaturalLanguageWorkflowParser:
         Args:
             workflow_text: workflow的自然语言描述
             user_input: 用户原始输入
+            skill_name: 技能名称（用于fallback解析）
 
         Returns:
             WorkflowPlan: 解析出的执行计划
@@ -180,7 +186,7 @@ class NaturalLanguageWorkflowParser:
                         "step_number": 1,
                         "description": "读取数据文件",
                         "tool_type": "skill",
-                        "tool_name": "data-analysis",
+                        "tool_name": skill_name or "data-analysis",
                         "parameters": {
                             "data_file": "{data_file}"
                         },
@@ -192,7 +198,7 @@ class NaturalLanguageWorkflowParser:
                         "step_number": 2,
                         "description": "分析数据",
                         "tool_type": "skill",
-                        "tool_name": "data-analysis",
+                        "tool_name": skill_name or "data-analysis",
                         "parameters": {
                             "analysis_type": "{analysis_type}"
                         },
@@ -246,7 +252,7 @@ class NaturalLanguageWorkflowParser:
         except Exception as e:
             logger.error(f"解析workflow失败: {e}")
             # 降级：使用简单的规则解析
-            return self._fallback_parse(workflow_text, user_input)
+            return self._fallback_parse(workflow_text, user_input, skill_name)
 
     def _build_parse_prompt(self, workflow_text: str, user_input: str) -> str:
         """构建解析提示词"""
@@ -289,12 +295,23 @@ Workflow描述:
             status=StepStatus.PENDING
         )
 
-    def _fallback_parse(self, workflow_text: str, user_input: str) -> WorkflowPlan:
+    def _fallback_parse(self, workflow_text: str, user_input: str, skill_name: str = "") -> WorkflowPlan:
         """降级解析：使用简单的规则"""
         import re
 
         steps = []
         lines = workflow_text.split('\n')
+        all_params = set()  # 收集所有参数占位符
+
+        # 使用传入的 skill_name，如果没有则尝试推断
+        inferred_skill = skill_name
+        if not inferred_skill:
+            if "data-analysis" in workflow_text or "数据分析" in workflow_text:
+                inferred_skill = "data-analysis"
+            elif "visualization" in workflow_text or "可视化" in workflow_text:
+                inferred_skill = "visualization"
+            elif "knowledge-qa" in workflow_text or "知识问答" in workflow_text:
+                inferred_skill = "knowledge-qa"
 
         step_number = 0
         for line in lines:
@@ -304,9 +321,14 @@ Workflow描述:
                 step_number += 1
                 description = match.group(2)
 
+                # 从步骤描述中提取参数占位符 {param_name}
+                param_matches = re.findall(r'\{(\w+)\}', description)
+                for param in param_matches:
+                    all_params.add(param)
+
                 # 简单判断工具类型
                 tool_type = "skill"
-                tool_name = ""
+                tool_name = inferred_skill  # 使用传入或推断的技能名称
                 if "web_search" in description:
                     tool_type = "mcp_tool"
                     tool_name = "web_search"
@@ -316,19 +338,30 @@ Workflow描述:
                 elif "PPT" in description:
                     tool_name = "PPT"
 
+                # 构建参数字典
+                parameters = {}
+                for param in param_matches:
+                    parameters[param] = f"{{{param}}}"
+
                 steps.append(WorkflowStep(
                     step_number=step_number,
                     description=description,
                     tool_type=tool_type,
                     tool_name=tool_name,
+                    parameters=parameters,
                     status=StepStatus.PENDING
                 ))
 
+        # 转换为列表
+        required_params = list(all_params)
+
+        logger.info(f"Fallback解析完成: {len(steps)} 个步骤, {len(required_params)} 个参数, skill: {inferred_skill}")
+
         return WorkflowPlan(
             steps=steps,
-            required_params=[],
+            required_params=required_params,
             extracted_params={},
-            missing_params=[]
+            missing_params=required_params  # 初始时所有参数都是缺失的
         )
 
 
@@ -409,7 +442,7 @@ class NaturalLanguageWorkflowExecutor:
 
     def __init__(
         self,
-        llm_client: ZhipuAIClient,
+        llm_client: LLMClientType,
         mcp_executor: MCPToolExecutor,
         skill_orchestrator: SkillOrchestrator,
         skill_registry: SkillRegistry
@@ -481,8 +514,8 @@ class NaturalLanguageWorkflowExecutor:
         """初始化执行状态"""
         logger.info(f"初始化workflow执行: {skill_name}")
 
-        # 解析workflow
-        plan = await self.parser.parse(workflow_text, user_input)
+        # 解析workflow，传递技能名称
+        plan = await self.parser.parse(workflow_text, user_input, skill_name)
 
         logger.info(f"解析出 {len(plan.steps)} 个步骤")
         for step in plan.steps:

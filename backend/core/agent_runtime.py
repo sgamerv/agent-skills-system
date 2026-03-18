@@ -91,26 +91,8 @@ class AgentRuntime:
         llm: ChatOpenAI | None = None,
         redis_client: Any | None = None,
     ) -> None:
-        # 使用工厂类创建LLM客户端
-        xinference_client, zhipuai_client = LLMProviderFactory.create_llm_client()
-
-        # 初始化 LangChain LLM（用于对话管理）
-        # 如果使用 zhipuai，则使用 xinference 作为后备
-        if xinference_client is not None:
-            self.llm = llm or xinference_client
-        else:
-            # 如果 xinference 不可用，尝试使用 zhipuai 创建一个简单的 LangChain 客户端
-            if zhipuai_client is not None:
-                logger.info("使用智谱AI创建LangChain兼容客户端")
-                self.llm = ChatOpenAI(
-                    base_url="https://open.bigmodel.cn/api/paas/v4",
-                    api_key=settings.ZHIPUAI_API_KEY,
-                    model=settings.ZHIPUAI_MODEL,
-                    temperature=settings.ZHIPUAI_TEMPERATURE,
-                )
-            else:
-                logger.error("无法初始化LangChain LLM客户端")
-                self.llm = None
+        # 使用工厂类创建统一的LLM客户端
+        self.llm = llm or LLMProviderFactory.create_llm()
 
         # 初始化技能管理
         self.skill_registry = SkillRegistry(settings.SKILLS_DIR)
@@ -148,42 +130,26 @@ class AgentRuntime:
         # Redis客户端用于持久化session_state
         self.redis_client = redis_client
 
-        # 初始化LLM组件（如果配置了LLM Skill Router）
-        if settings.ENABLE_LLM_SKILL_ROUTER:
-            logger.info("初始化LLM Skill Router...")
+        # 初始化LLM Router和Workflow执行器（统一使用self.llm）
+        logger.info("初始化LLM Skill Router和Workflow执行器...")
 
-            # 根据配置选择LLM客户端
-            self.zhipuai_client = zhipuai_client
+        self.llm_router = LLMSkillRouter(
+            self.llm,
+            self.skill_registry
+        )
 
-            if self.zhipuai_client is None:
-                logger.error("智谱AI客户端创建失败，LLM Skill Router将无法使用")
-                self.llm_router = None
-                self.mcp_executor = None
-                self.workflow_executor = None
-            else:
-                self.llm_router = LLMSkillRouter(
-                    self.zhipuai_client,
-                    self.skill_registry
-                )
+        # 初始化MCP工具执行器
+        self.mcp_executor = MCPToolExecutor()
 
-                # 初始化MCP工具执行器
-                self.mcp_executor = MCPToolExecutor()
+        # 初始化自然语言workflow执行器
+        self.workflow_executor = NaturalLanguageWorkflowExecutor(
+            llm_client=self.llm,
+            mcp_executor=self.mcp_executor,
+            skill_orchestrator=self.skill_orchestrator,
+            skill_registry=self.skill_registry
+        )
 
-                # 初始化自然语言workflow执行器
-                self.workflow_executor = NaturalLanguageWorkflowExecutor(
-                    llm_client=self.zhipuai_client,
-                    mcp_executor=self.mcp_executor,
-                    skill_orchestrator=self.skill_orchestrator,
-                    skill_registry=self.skill_registry
-                )
-
-                logger.info("LLM组件初始化完成")
-        else:
-            self.zhipuai_client = None
-            self.llm_router = None
-            self.mcp_executor = None
-            self.workflow_executor = None
-            logger.info("未配置LLM Skill Router")
+        logger.info("LLM组件初始化完成")
 
     async def _get_session_state(self, state_key: str) -> Dict[str, Any] | None:
         """从Redis或内存获取会话状态"""
@@ -375,16 +341,37 @@ class AgentRuntime:
 
         try:
             # 恢复执行状态
-            from backend.core.natural_language_workflow import ExecutionState, WorkflowPlan
+            from backend.core.natural_language_workflow import ExecutionState, WorkflowPlan, WorkflowStep, StepStatus
 
-            # 重建ExecutionState
+            # 从保存的状态中恢复 plan
+            saved_plan = session_state.get("execution_state", {}).get("plan", {})
+            saved_steps = saved_plan.get("steps", [])
+
+            # 重建 steps 列表
+            steps = []
+            for step_data in saved_steps:
+                step = WorkflowStep(
+                    step_number=step_data.get("step_number", 0),
+                    description=step_data.get("description", ""),
+                    tool_type=step_data.get("tool_type", "skill"),
+                    tool_name=step_data.get("tool_name", ""),
+                    parameters=step_data.get("parameters", {}),
+                    depends_on=step_data.get("depends_on", []),
+                    requires_user_input=step_data.get("requires_user_input", False),
+                    user_prompt=step_data.get("user_prompt", ""),
+                    status=StepStatus(step_data.get("status", "pending"))
+                )
+                steps.append(step)
+
+            # 重建 WorkflowPlan
             plan = WorkflowPlan(
-                steps=[],
-                required_params=[],
-                extracted_params={},
-                missing_params=session_state.get("execution_state", {}).get("missing_params", [])
+                steps=steps,
+                required_params=saved_plan.get("required_params", []),
+                extracted_params=saved_plan.get("extracted_params", {}),
+                missing_params=saved_plan.get("missing_params", [])
             )
 
+            # 重建 ExecutionState
             execution_state = ExecutionState(
                 skill_name=session_state.get("skill_name", ""),
                 workflow_text=session_state.get("workflow_text", ""),

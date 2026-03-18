@@ -45,7 +45,6 @@ class Settings(BaseSettings):
 
     # LLM 提供者配置
     LLM_PROVIDER: str = "zhipuai"  # 可选: "xinference" 或 "zhipuai"
-    ENABLE_LLM_SKILL_ROUTER: bool = True
 
     # 数据库配置
     REDIS_URL: str = "redis://localhost:6379/0"
