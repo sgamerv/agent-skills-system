@@ -150,9 +150,12 @@ class IntentAnalyzer:
 
         except Exception as e:
             logger.error(f"[IntentAnalyzer] 意图分析失败: {e}")
-            logger.info("[IntentAnalyzer] 降级到规则匹配")
-            # 降级到简单规则匹配
-            return self._fallback_analyze(user_input, context)
+            # 返回默认聊天意图
+            return Intent(
+                intent_type=IntentType.CHAT,
+                confidence=0.0,
+                reasoning=f"意图分析失败: {str(e)}"
+            )
 
     def _build_intent_prompt(
         self,
@@ -199,47 +202,6 @@ class IntentAnalyzer:
 - reasoning: 分析理由"""
 
         return prompt
-
-    def _fallback_analyze(self, user_input: str, context: Dict) -> Intent:
-        """降级分析：使用规则匹配"""
-        user_input_lower = user_input.lower()
-
-        # 特殊指令
-        if "查看技能" in user_input or "技能列表" in user_input or "有什么技能" in user_input:
-            return Intent(
-                intent_type=IntentType.VIEW_SKILLS,
-                confidence=1.0,
-                reasoning="明确请求查看技能列表"
-            )
-
-        if "帮助" in user_input or "help" in user_input_lower:
-            return Intent(
-                intent_type=IntentType.HELP,
-                confidence=1.0,
-                reasoning="明确请求帮助"
-            )
-
-        # 确认/拒绝
-        if "确认" in user_input or "确定" in user_input or "好的" in user_input or "是" in user_input:
-            return Intent(
-                intent_type=IntentType.CONFIRM,
-                confidence=0.8,
-                reasoning="看起来是确认操作"
-            )
-
-        if "不" in user_input or "取消" in user_input or "否" in user_input:
-            return Intent(
-                intent_type=IntentType.REJECT,
-                confidence=0.8,
-                reasoning="看起来是拒绝操作"
-            )
-
-        # 默认返回聊天意图
-        return Intent(
-            intent_type=IntentType.CHAT,
-            confidence=0.5,
-            reasoning="未匹配到明确意图"
-        )
 
 
 class SkillMatcher:
@@ -368,9 +330,8 @@ class SkillMatcher:
 
         except Exception as e:
             logger.error(f"[SkillMatcher] 技能匹配失败: {e}")
-            logger.info("[SkillMatcher] 降级到关键词匹配")
-            # 降级到关键词匹配
-            return self._fallback_match(intent, available_skills)
+            # 返回空匹配列表
+            return []
 
     def _build_match_prompt(
         self,
@@ -421,49 +382,6 @@ class SkillMatcher:
 如果没有合适的技能，matches数组可以为空。"""
 
         return prompt
-
-    def _fallback_match(
-        self,
-        intent: Intent,
-        available_skills: List[Dict[str, Any]]
-    ) -> List[SkillMatch]:
-        """降级匹配：使用简单的关键词匹配"""
-        if not available_skills:
-            return []
-
-        matches = []
-        user_input = intent.reasoning.lower()
-
-        for skill in available_skills:
-            skill_name = skill['name'].lower()
-            description = skill.get('description', '').lower()
-
-            # 计算匹配分数
-            score = 0.0
-
-            # 如果用户明确指定了技能名
-            if intent.target_skill and intent.target_skill.lower() == skill_name:
-                score = 1.0
-            else:
-                # 简单的关键词匹配
-                keywords = user_input.split()
-                for keyword in keywords:
-                    if keyword in skill_name:
-                        score += 0.5
-                    if keyword in description:
-                        score += 0.3
-
-                score = min(score, 1.0)
-
-            if score > 0.3:  # 阈值
-                matches.append(SkillMatch(
-                    skill_name=skill['name'],
-                    relevance=score,
-                    reasoning="基于关键词匹配"
-                ))
-
-        matches.sort(key=lambda x: x.relevance, reverse=True)
-        return matches[:3]  # 返回前3个匹配
 
 
 class WorkflowManager:
@@ -524,8 +442,11 @@ class WorkflowManager:
 
         except Exception as e:
             logger.error(f"决策失败: {e}")
-            # 降级到简单规则
-            return self._fallback_decision(user_input, current_state, context)
+            # 返回默认聊天动作
+            return NextAction(
+                action_type="chat",
+                message="抱歉，我遇到了一些问题。请重新描述您的需求。"
+            )
 
     def _build_decision_prompt(
         self,
@@ -579,34 +500,6 @@ class WorkflowManager:
 - parameters: 相关参数（如果需要）"""
 
         return prompt
-
-    def _fallback_decision(
-        self,
-        user_input: str,
-        current_state: Dict[str, Any],
-        context: Dict[str, Any]
-    ) -> NextAction:
-        """降级决策：使用简单规则"""
-        state = current_state.get("state", "unknown")
-
-        # 确认/拒绝
-        if "确认" in user_input or "确定" in user_input or "好的" in user_input:
-            return NextAction(
-                action_type="execute_skill",
-                message="好的，正在执行..."
-            )
-
-        if "不" in user_input or "取消" in user_input:
-            return NextAction(
-                action_type="complete",
-                message="已取消操作。"
-            )
-
-        # 默认：询问用户更多信息
-        return NextAction(
-            action_type="chat",
-            message="请问您需要什么帮助？"
-        )
 
 
 class LLMSkillRouter:

@@ -13,6 +13,7 @@ from backend.config.logging_config import get_logger, setup_logging
 from backend.core.agent_runtime import AgentRuntime
 from backend.core.memory import ProfileManager
 from backend.core.session_manager import MessageManager, SessionManager
+from backend.core.llm_provider_factory import LLMProviderFactory
 
 # 配置全局日志
 setup_logging(level=settings.LOG_LEVEL_INT)
@@ -40,6 +41,14 @@ app.add_middleware(
 async def startup_event() -> None:
     """应用启动事件"""
     import redis.asyncio as redis
+
+    # 测试LLM连接
+    logger.info(f"测试LLM连接，提供者: {settings.LLM_PROVIDER}")
+    llm_connection_ok = LLMProviderFactory.test_connection()
+    if not llm_connection_ok:
+        logger.error("LLM连接测试失败！请检查配置")
+    else:
+        logger.info("LLM连接测试成功")
 
     # 初始化 Redis 客户端
     redis_client = None
@@ -140,7 +149,15 @@ async def root():
 @app.get("/health")
 async def health_check():
     """健康检查"""
-    return {"status": "healthy"}
+    agent: AgentRuntime = app.state.agent
+
+    return {
+        "status": "healthy",
+        "llm_provider": settings.LLM_PROVIDER,
+        "llm_available": agent.llm is not None,
+        "zhipuai_available": agent.zhipuai_client is not None,
+        "workflow_executor_available": agent.workflow_executor is not None
+    }
 
 
 @app.post("/chat", response_model=ChatResponse)
@@ -154,6 +171,14 @@ async def chat(request: ChatRequest) -> ChatResponse:
 
     # 记录请求信息
     logger.info(f"收到聊天请求: user_id={request.user_id}, session_id={request.session_id}, user_input={request.user_input[:50]}")
+
+    # 检查LLM是否可用
+    if agent.llm is None:
+        logger.error("LLM客户端不可用，无法处理请求")
+        raise HTTPException(
+            status_code=503,
+            detail="无法连接到LLM服务，请检查配置或稍后重试"
+        )
 
     try:
         result = await agent.chat(

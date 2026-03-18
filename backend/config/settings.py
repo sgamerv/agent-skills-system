@@ -43,9 +43,9 @@ class Settings(BaseSettings):
     ZHIPUAI_TEMPERATURE: float = 0.7
     ZHIPUAI_MAX_TOKENS: int = 8000  # 增加到8000以支持更长的JSON响应
 
-    # LLM Skill Router配置
+    # LLM 提供者配置
+    LLM_PROVIDER: str = "zhipuai"  # 可选: "xinference" 或 "zhipuai"
     ENABLE_LLM_SKILL_ROUTER: bool = True
-    LLM_ROUTER_FALLBACK_TO_RULES: bool = True
 
     # 数据库配置
     REDIS_URL: str = "redis://localhost:6379/0"

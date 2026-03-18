@@ -37,6 +37,7 @@ from backend.core.natural_language_workflow import (
     NaturalLanguageWorkflowExecutor,
     MCPToolExecutor,
 )
+from backend.core.llm_provider_factory import LLMProviderFactory
 
 
 logger = logging.getLogger(__name__)
@@ -90,13 +91,26 @@ class AgentRuntime:
         llm: ChatOpenAI | None = None,
         redis_client: Any | None = None,
     ) -> None:
-        # 初始化 LLM
-        self.llm = llm or ChatOpenAI(
-            base_url=settings.XINFERENCE_URL,
-            api_key="empty",
-            model=settings.XINFERENCE_MODEL_UID,
-            temperature=0.7,
-        )
+        # 使用工厂类创建LLM客户端
+        xinference_client, zhipuai_client = LLMProviderFactory.create_llm_client()
+
+        # 初始化 LangChain LLM（用于对话管理）
+        # 如果使用 zhipuai，则使用 xinference 作为后备
+        if xinference_client is not None:
+            self.llm = llm or xinference_client
+        else:
+            # 如果 xinference 不可用，尝试使用 zhipuai 创建一个简单的 LangChain 客户端
+            if zhipuai_client is not None:
+                logger.info("使用智谱AI创建LangChain兼容客户端")
+                self.llm = ChatOpenAI(
+                    base_url="https://open.bigmodel.cn/api/paas/v4",
+                    api_key=settings.ZHIPUAI_API_KEY,
+                    model=settings.ZHIPUAI_MODEL,
+                    temperature=settings.ZHIPUAI_TEMPERATURE,
+                )
+            else:
+                logger.error("无法初始化LangChain LLM客户端")
+                self.llm = None
 
         # 初始化技能管理
         self.skill_registry = SkillRegistry(settings.SKILLS_DIR)
@@ -134,38 +148,42 @@ class AgentRuntime:
         # Redis客户端用于持久化session_state
         self.redis_client = redis_client
 
-        # 初始化LLM组件（如果配置了智谱AI）
-        if settings.ENABLE_LLM_SKILL_ROUTER and settings.ZHIPUAI_API_KEY:
+        # 初始化LLM组件（如果配置了LLM Skill Router）
+        if settings.ENABLE_LLM_SKILL_ROUTER:
             logger.info("初始化LLM Skill Router...")
-            self.zhipuai_client = ZhipuAIClient(
-                api_key=settings.ZHIPUAI_API_KEY,
-                model=settings.ZHIPUAI_MODEL,
-                temperature=settings.ZHIPUAI_TEMPERATURE,
-                max_tokens=settings.ZHIPUAI_MAX_TOKENS
-            )
-            self.llm_router = LLMSkillRouter(
-                self.zhipuai_client,
-                self.skill_registry
-            )
 
-            # 初始化MCP工具执行器
-            self.mcp_executor = MCPToolExecutor()
+            # 根据配置选择LLM客户端
+            self.zhipuai_client = zhipuai_client
 
-            # 初始化自然语言workflow执行器
-            self.workflow_executor = NaturalLanguageWorkflowExecutor(
-                llm_client=self.zhipuai_client,
-                mcp_executor=self.mcp_executor,
-                skill_orchestrator=self.skill_orchestrator,
-                skill_registry=self.skill_registry
-            )
+            if self.zhipuai_client is None:
+                logger.error("智谱AI客户端创建失败，LLM Skill Router将无法使用")
+                self.llm_router = None
+                self.mcp_executor = None
+                self.workflow_executor = None
+            else:
+                self.llm_router = LLMSkillRouter(
+                    self.zhipuai_client,
+                    self.skill_registry
+                )
 
-            logger.info("LLM组件初始化完成")
+                # 初始化MCP工具执行器
+                self.mcp_executor = MCPToolExecutor()
+
+                # 初始化自然语言workflow执行器
+                self.workflow_executor = NaturalLanguageWorkflowExecutor(
+                    llm_client=self.zhipuai_client,
+                    mcp_executor=self.mcp_executor,
+                    skill_orchestrator=self.skill_orchestrator,
+                    skill_registry=self.skill_registry
+                )
+
+                logger.info("LLM组件初始化完成")
         else:
             self.zhipuai_client = None
             self.llm_router = None
             self.mcp_executor = None
             self.workflow_executor = None
-            logger.info("未配置LLM Skill Router，使用传统模式")
+            logger.info("未配置LLM Skill Router")
 
     async def _get_session_state(self, state_key: str) -> Dict[str, Any] | None:
         """从Redis或内存获取会话状态"""
@@ -336,36 +354,6 @@ class AgentRuntime:
                 session_id,
                 session_state
             )
-
-        elif current_state == "skill_selection":
-            # 用户处于技能选择状态，尝试解析用户选择的技能
-            selected_skill = self._parse_skill_selection(user_input, session_state.get("matched_skills"))
-
-            if not selected_skill:
-                # 用户没有选择有效技能，重新显示技能列表
-                logger.info(f"用户输入无效技能选择: {user_input}，重新执行技能匹配")
-                return await self._step1_skill_matching(user_input, user_id, conversation_id, session_id)
-
-            # 用户选择了有效技能，进入参数收集
-            logger.info(f"用户选择了技能: {selected_skill}，进入参数收集阶段")
-            return await self._step2_parameter_collection(user_input, user_id, conversation_id, session_id, session_state)
-
-        elif current_state == "collecting_parameters":
-            # 用户提供了参数，继续收集或进入确认
-            return await self._step2_parameter_collection(user_input, user_id, conversation_id, session_id, session_state)
-
-        elif current_state == "awaiting_confirmation":
-            # 用户确认或修改参数
-            if "确认" in user_input or "确定" in user_input:
-                return await self._step3_skill_execution(user_id, conversation_id, session_id, session_state)
-            else:
-                # 用户想修改参数，重新进入参数收集
-                return await self._step2_parameter_collection(user_input, user_id, conversation_id, session_id, session_state)
-
-        elif current_state == "feedback_required":
-            # 用户提供了反馈
-            return await self._step5_feedback_handling(user_input, user_id, conversation_id, session_id, session_state)
-
         else:
             # 未知状态，重新开始
             logger.warning(f"未知状态: {current_state}，重新开始")
@@ -491,24 +479,10 @@ class AgentRuntime:
         第一步：技能匹配与推荐
         - 使用LLM router进行智能匹配
         - 如果匹配到技能，使用natural language workflow执行
-        - 如果没有匹配到任何 skill，则给出兜底方法
+        - 如果没有匹配到任何 skill，则给出提示
         """
-        # 特殊指令处理
-        if "查看技能" in user_input or "技能列表" in user_input or "帮助" in user_input:
-            return self._show_all_skills(user_id, conversation_id, session_id)
-
-        # 如果配置了LLM router，使用新的流程
-        if self.workflow_executor:
-            return await self._execute_with_natural_language_workflow(
-                user_input,
-                user_id,
-                conversation_id,
-                session_id,
-                memory_context
-            )
-
-        # 降级：使用旧的规则匹配逻辑
-        return await self._step1_skill_matching_legacy(
+        # 使用 LLM router 和 natural language workflow 执行
+        return await self._execute_with_natural_language_workflow(
             user_input,
             user_id,
             conversation_id,
@@ -536,7 +510,13 @@ class AgentRuntime:
 
             # 处理特殊动作
             if route_result["action"] == "view_skills":
-                return self._show_all_skills(user_id, conversation_id, session_id)
+                return {
+                    "response": route_result.get("message", "查看技能列表"),
+                    "conversation_id": conversation_id,
+                    "session_id": session_id,
+                    "mode": "direct",
+                    "state": "completed"
+                }
 
             elif route_result["action"] == "help":
                 # 使用LLM router的帮助响应
@@ -681,462 +661,23 @@ class AgentRuntime:
 
         except Exception as e:
             logger.error(f"Natural language workflow执行失败: {e}")
-            # 降级到传统模式
-            return await self._step1_skill_matching_legacy(
-                user_input,
-                user_id,
-                conversation_id,
-                session_id,
-                memory_context
-            )
-
-    async def _step1_skill_matching_legacy(
-        self,
-        user_input: str,
-        user_id: str,
-        conversation_id: str = None,
-        session_id: str = None,
-        memory_context: Dict = None
-    ) -> Dict[str, Any]:
-        """传统技能匹配（降级方案）"""
-        # 匹配技能（简单的关键词匹配）
-        matched_skills = self._match_skills(user_input)
-
-        if not matched_skills:
-            # 兜底处理：没有匹配到任何技能
-            response = "很抱歉，我没有找到能够处理您请求的技能。\n\n"
-            response += "这可能是因为：\n"
-            response += "1. 您的需求不在当前系统功能范围内\n"
-            response += "2. 我可能没有正确理解您的意图\n\n"
-            response += "建议您：\n"
-            response += "- 尝试用更具体的描述重新提问\n"
-            response += "- 输入\"转人工\"连接人工客服\n"
-            response += "- 查看系统支持的技能列表（输入\"查看技能\"）\n\n"
-            response += "我们会持续改进系统功能，感谢您的理解！"
-
+            # 返回错误信息
             return {
-                "response": response,
-                "conversation_id": conversation_id,
-                "session_id": session_id,
-                "mode": "dialogue",
-                "state": "escalated",
-                "available_skills": None,
-                "next_action": "wait_or_escalate"
-            }
-
-        # 有匹配的技能，向用户推荐
-        skill_list_text = "\n".join([
-            f"{i+1}. {name} - {metadata.get('description', '无描述')}"
-            for i, (name, metadata) in enumerate(matched_skills.items())
-        ])
-
-        response = f"根据您的描述，我为您找到了以下技能：\n\n{skill_list_text}\n\n"
-        response += "请告诉我您想使用哪个技能（输入技能名称或编号），或输入\"无匹配\"转人工处理。"
-
-        # 保存会话状态
-        state_key = f"{user_id}:{session_id or 'default'}"
-        await self._set_session_state(state_key, {
-            "state": "skill_selection",
-            "matched_skills": matched_skills,
-            "user_input": user_input,
-            "memory_context": memory_context,
-            "timestamp": datetime.now().isoformat()
-        })
-
-        return {
-            "response": response,
-            "conversation_id": conversation_id,
-            "session_id": session_id,
-            "mode": "dialogue",
-            "state": "skill_selection",
-            "available_skills": [
-                {"name": name, "description": metadata.get("description", "")}
-                for name, metadata in matched_skills.items()
-            ],
-            "next_action": "user_select_skill"
-        }
-
-    async def _step2_parameter_collection(
-        self,
-        user_input: str,
-        user_id: str,
-        conversation_id: str = None,
-        session_id: str = None,
-        session_state: Dict = None
-    ) -> Dict[str, Any]:
-        """
-        第二步：参数收集与确认
-        - 当用户确认使用某个 skill 解决问题后
-        - 通过多轮对话来满足可以使用 skill 的前提条件
-        """
-        state_key = f"{user_id}:{session_id or 'default'}"
-
-        # 如果当前状态是 skill_selection，说明用户刚选择了技能（在 _continue_flow 中已验证）
-        if session_state.get("state") == "skill_selection":
-            # 获取用户选择的技能
-            selected_skill_name = self._parse_skill_selection(user_input, session_state.get("matched_skills"))
-
-            if not selected_skill_name:
-                # 这个分支理论上不应该执行，因为 _continue_flow 中已经处理了
-                logger.error(f"逻辑错误: selected_skill_name 为空，但仍然进入了参数收集")
-                await self._clear_session_state(state_key)
-                return await self._step1_skill_matching(user_input, user_id, conversation_id, session_id)
-
-            # 用户选择了技能，开始收集参数
-            skill_metadata = self.skill_registry.get_skill_metadata(selected_skill_name)
-            slots = self.skill_loader.get_skill_slots(selected_skill_name)
-
-            # 保存选择的技能
-            session_state["state"] = "collecting_parameters"
-            session_state["selected_skill"] = selected_skill_name
-            session_state["slots"] = slots
-            session_state["collected_parameters"] = {}
-            session_state["current_slot_index"] = 0
-            await self._set_session_state(state_key, session_state)
-
-            # 询问第一个参数
-            current_slot = slots[0]
-            response = f"好的，我将使用 {selected_skill_name} 技能帮您处理。\n\n"
-            response += f"{current_slot.get('prompt', '')}\n"
-            if current_slot.get("options"):
-                options = current_slot.get("options", [])
-                # 兼容 options 的两种格式：字典或列表
-                if isinstance(options, dict):
-                    options_text = "\n".join([
-                        f"- {opt} - {desc}" if desc else f"- {opt}"
-                        for opt, desc in options.items()
-                    ])
-                elif isinstance(options, list):
-                    if len(options) > 0 and len(options) % 2 == 0:
-                        options_text = "\n".join([
-                            f"- {options[i]} - {options[i+1]}"
-                            for i in range(0, len(options), 2)
-                        ])
-                    else:
-                        options_text = "\n".join([f"- {opt}" for opt in options])
-                else:
-                    options_text = str(options)
-                response += f"\n可选选项：\n{options_text}"
-
-            return {
-                "response": response,
-                "conversation_id": conversation_id,
-                "session_id": session_id,
-                "mode": "dialogue",
-                "state": "collecting_parameters",
-                "current_slot": current_slot,
-                "collected_parameters": session_state.get("collected_parameters"),
-                "next_action": "provide_parameter"
-            }
-
-        # 继续收集参数
-        current_slot_index = session_state.get("current_slot_index", 0)
-        slots = session_state.get("slots", [])
-        collected_parameters = session_state.get("collected_parameters", {})
-
-        # 保存当前参数
-        current_slot = slots[current_slot_index]
-        param_value = user_input.strip()
-        collected_parameters[current_slot["name"]] = param_value
-
-        # 移动到下一个参数
-        current_slot_index += 1
-
-        if current_slot_index < len(slots):
-            # 还有参数需要收集
-            next_slot = slots[current_slot_index]
-
-            # 跳过可选参数（如果用户没有提供）
-            if not next_slot.get("required", True):
-                session_state["collected_parameters"] = collected_parameters
-                session_state["current_slot_index"] = current_slot_index
-                await self._set_session_state(state_key, session_state)
-                return await self._step2_parameter_collection("跳过", user_id, conversation_id, session_id, session_state)
-
-            # 询问下一个参数
-            response = next_slot.get("prompt", "")
-            if next_slot.get("options"):
-                options = next_slot.get("options", [])
-                # 兼容 options 的两种格式：字典或列表
-                if isinstance(options, dict):
-                    options_text = "\n".join([
-                        f"- {opt} - {desc}" if desc else f"- {opt}"
-                        for opt, desc in options.items()
-                    ])
-                elif isinstance(options, list):
-                    # 列表可能是简单列表 ["opt1", "opt2"]
-                    # 或交替列表 ["opt1", "desc1", "opt2", "desc2"]
-                    if len(options) > 0 and len(options) % 2 == 0:
-                        # 可能是交替列表，尝试配对
-                        options_text = "\n".join([
-                            f"- {options[i]} - {options[i+1]}"
-                            for i in range(0, len(options), 2)
-                        ])
-                    else:
-                        # 简单列表
-                        options_text = "\n".join([f"- {opt}" for opt in options])
-                else:
-                    options_text = str(options)
-                response += f"\n可选选项：\n{options_text}"
-
-            session_state["collected_parameters"] = collected_parameters
-            session_state["current_slot_index"] = current_slot_index
-            await self._set_session_state(state_key, session_state)
-
-            return {
-                "response": response,
-                "conversation_id": conversation_id,
-                "session_id": session_id,
-                "mode": "dialogue",
-                "state": "collecting_parameters",
-                "current_slot": next_slot,
-                "collected_parameters": collected_parameters,
-                "next_action": "provide_parameter"
-            }
-        else:
-            # 所有参数收集完成，进入确认阶段
-            session_state["state"] = "awaiting_confirmation"
-            session_state["collected_parameters"] = collected_parameters
-            await self._set_session_state(state_key, session_state)
-
-            # 生成确认信息
-            params_text = "\n".join([
-                f"- {key}: {value}"
-                for key, value in collected_parameters.items()
-            ])
-
-            response = "参数已收集完成，请确认：\n\n"
-            response += f"{params_text}\n\n"
-            response += '是否确认执行？（输入"确认"开始执行，或"修改"调整参数）'
-
-            return {
-                "response": response,
-                "conversation_id": conversation_id,
-                "session_id": session_id,
-                "mode": "dialogue",
-                "state": "awaiting_confirmation",
-                "collected_parameters": collected_parameters,
-                "next_action": "confirm_or_modify"
-            }
-
-    async def _step3_skill_execution(
-        self,
-        user_id: str,
-        conversation_id: str = None,
-        session_id: str = None,
-        session_state: Dict = None
-    ) -> Dict[str, Any]:
-        """
-        第三步：技能执行与结果返回
-        - 当条件都满足后，开始执行 skill
-        - 如果能迅速获取结果的，则返回用户
-        - 如果是需要执行一段时间的，则告知用户如何获取执行结果
-        """
-        state_key = f"{user_id}:{session_id or 'default'}"
-        selected_skill = session_state.get("selected_skill")
-        collected_parameters = session_state.get("collected_parameters", {})
-
-        # 执行技能
-        try:
-            result = await self.skill_orchestrator.execute_single(
-                selected_skill,
-                collected_parameters
-            )
-
-            # 清除会话状态
-            await self._clear_session_state(state_key)
-
-            # 生成结果响应
-            response = "✅ 执行完成！\n\n"
-            response += f"执行结果：\n{result.output}\n\n"
-            response += "请对结果进行评价，或继续使用其他功能。"
-
-            return {
-                "response": response,
+                "response": f"执行出错：{str(e)}",
                 "conversation_id": conversation_id,
                 "session_id": session_id,
                 "mode": "direct",
-                "state": "completed",
-                "execution_result": {
-                    "success": result.success,
-                    "output": result.output,
-                    "error": result.error
-                },
-                "feedback_required": True,
-                "next_action": "provide_feedback"
+                "state": "failed"
             }
 
-        except Exception as e:
-            logger.error(f"Skill execution error: {e}")
-            return {
-                "response": f"执行过程中出现错误：{str(e)}\n\n请重试或联系人工客服。",
-                "conversation_id": conversation_id,
-                "session_id": session_id,
-                "mode": "dialogue",
-                "state": "failed",
-                "error": str(e),
-                "next_action": "retry_or_escalate"
-            }
-
-    async def _step5_feedback_handling(
-        self,
-        user_input: str,
-        user_id: str,
-        conversation_id: str = None,
-        session_id: str = None,
-        session_state: Dict = None
-    ) -> Dict[str, Any]:
-        """
-        第五步：反馈处理与响应
-        - 当用户表达不满时，需要表示会反馈给人工跟踪处理
-        - 如果用户满意结果时，可以谦虚表示谢谢用户的支持
-        """
-        # 简单的情感分析
-        positive_keywords = ["满意", "好", "优秀", "不错", "赞", "thanks", "谢谢", "感谢"]
-        negative_keywords = ["不满", "差", "不好", "失望", "不满意", "糟糕", "错误"]
-
-        is_positive = any(keyword in user_input for keyword in positive_keywords)
-        is_negative = any(keyword in user_input for keyword in negative_keywords)
-
-        feedback_data = {
-            "user_id": user_id,
-            "feedback_text": user_input,
-            "timestamp": datetime.now().isoformat(),
-            "task_id": session_state.get("task_id"),
-            "skill_name": session_state.get("selected_skill")
-        }
-
-        if is_negative:
-            # 用户不满意
-            feedback_data["rating"] = "negative"
-            feedback_data["escalated"] = True
-
-            response = "非常抱歉给您带来了不好的体验！😔\n\n"
-            response += "我已经将您的反馈记录下来，并会立即反馈给人工团队进行跟踪处理。"
-            response += "我们的工作人员会在 24 小时内联系您。\n\n"
-            response += "如果您希望立即转接人工客服，请输入\"转人工\"。"
-
-            return {
-                "response": response,
-                "conversation_id": conversation_id,
-                "session_id": session_id,
-                "mode": "dialogue",
-                "state": "feedback_processed",
-                "feedback": feedback_data,
-                "next_action": "wait_or_escalate"
-            }
-        elif is_positive:
-            # 用户满意
-            feedback_data["rating"] = "positive"
-
-            response = "太好了，谢谢您的支持和肯定！🎉\n\n"
-            response += "能够帮到您是我们的荣幸。我们会继续努力，为您提供更好的服务。\n\n"
-            response += "还有其他我可以帮助您的吗？"
-
-            return {
-                "response": response,
-                "conversation_id": conversation_id,
-                "session_id": session_id,
-                "mode": "dialogue",
-                "state": "feedback_processed",
-                "feedback": feedback_data,
-                "next_action": "continue_conversation"
-            }
-        else:
-            # 中立反馈
-            feedback_data["rating"] = "neutral"
-
-            response = "感谢您的反馈！\n\n"
-            response += "我们会认真考虑您的意见，持续改进服务质量。\n\n"
-            response += "如果您有更多建议，欢迎随时告诉我们。还有其他我可以帮助您的吗？"
-
-            return {
-                "response": response,
-                "conversation_id": conversation_id,
-                "session_id": session_id,
-                "mode": "dialogue",
-                "state": "feedback_processed",
-                "feedback": feedback_data,
-                "next_action": "continue_conversation"
-            }
-
-    def _match_skills(self, user_input: str) -> Dict[str, Dict[str, Any]]:
-        """匹配用户输入与可用技能"""
-        matched = {}
-        user_input_lower = user_input.lower()
-
-        # 扩展的关键词匹配
-        keywords_mapping = {
-            "data-analysis": ["分析", "数据", "统计", "数据表", "excel", "csv", "报表", "计算"],
-            "knowledge-qa": ["问答", "知识", "文档", "搜索", "查询", "检索", "答案"],
-            "visualization": ["可视化", "图表", "画图", "绘图", "展示", "图形", "饼图", "柱状图", "折线图"]
-        }
-
-        # 简单的关键词匹配
-        for skill_name, metadata in self.skill_registry.skill_metadata.items():
-            description = metadata.get("description", "").lower()
-            tags = [tag.lower() for tag in metadata.get("tags", [])]
-            category = metadata.get("category", "").lower()
-
-            # 检查关键词映射
-            keywords = keywords_mapping.get(skill_name, [])
-            if any(keyword in user_input_lower for keyword in keywords):
-                matched[skill_name] = metadata
-                continue
-
-            # 检查描述、标签、类别是否包含用户输入的关键词
-            if any(keyword in description for keyword in user_input_lower.split()):
-                matched[skill_name] = metadata
-            elif any(tag in user_input_lower for tag in tags):
-                matched[skill_name] = metadata
-            elif category in user_input_lower:
-                matched[skill_name] = metadata
-
-        return matched
-
-    def _show_all_skills(self, user_id: str, conversation_id: str = None, session_id: str = None) -> Dict[str, Any]:
-        """显示所有可用技能"""
-        skills = self.skill_registry.skill_metadata
-
-        if not skills:
-            response = "当前系统中没有可用的技能。"
-        else:
-            skill_list_text = "\n".join([
-                f"{i+1}. {name}\n   {metadata.get('description', '无描述')}\n   分类: {metadata.get('category', '未分类')}"
-                for i, (name, metadata) in enumerate(skills.items())
-            ])
-
-            response = "系统支持以下技能：\n\n"
-            response += skill_list_text
-            response += "\n\n请告诉我您想使用哪个技能（输入技能名称或编号），或描述您的需求，我会为您推荐合适的技能。"
-
-        return {
-            "response": response,
-            "conversation_id": conversation_id,
-            "session_id": session_id,
-            "mode": "dialogue",
-            "state": "skill_selection",
-            "available_skills": [
-                {"name": name, "description": metadata.get("description", "")}
-                for name, metadata in skills.items()
-            ],
-            "next_action": "user_select_skill"
-        }
-
-    def _parse_skill_selection(self, user_input: str, matched_skills: Dict[str, Dict]) -> str | None:
-        """解析用户选择的技能"""
-        user_input = user_input.strip()
-
-        # 检查是否输入了编号
-        if user_input.isdigit():
-            skill_names = list(matched_skills.keys())
-            index = int(user_input) - 1
-            if 0 <= index < len(skill_names):
-                return skill_names[index]
-
-        # 检查是否输入了技能名称
-        for skill_name in matched_skills.keys():
-            if skill_name.lower() in user_input.lower():
-                return skill_name
-
-        return None
+    # ==================== 传统匹配逻辑已移除 ====================
+    # 以下方法已被移除：
+    # - _step1_skill_matching_legacy (传统关键词匹配)
+    # - _step2_parameter_collection (参数收集)
+    # - _step3_skill_execution (技能执行)
+    # - _step5_feedback_handling (反馈处理)
+    # - _match_skills (关键词匹配)
+    # - _parse_skill_selection (解析技能选择)
+    # - _show_all_skills (显示技能列表)
+    #
+    # 现在使用 LLM Router + Natural Language Workflow 完成所有功能
