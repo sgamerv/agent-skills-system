@@ -6,12 +6,13 @@ from dataclasses import dataclass
 from enum import Enum
 
 from backend.llm.zhipuai_client import ZhipuAIClient
+from backend.llm.vllm_client import VLLMClient
 from backend.core.skill_manager import SkillRegistry
 
 logger = logging.getLogger(__name__)
 
 # LLM客户端类型
-LLMClientType = Union[ZhipuAIClient, Any]  # Any 用于兼容 LangChain ChatOpenAI
+LLMClientType = Union[ZhipuAIClient, VLLMClient, Any]  # Any 用于兼容 LangChain ChatOpenAI
 
 
 class IntentType(Enum):

@@ -202,8 +202,8 @@ class AgentRuntime:
         user_input: str,
         response: str,
         user_id: str,
-        conversation_id: str = None,
-        session_id: str = None
+        conversation_id: str | None = None,
+        session_id: str | None = None
     ):
         """保存用户和助手的消息"""
         if not session_id:
@@ -544,7 +544,7 @@ class AgentRuntime:
                 skill_name = route_result["skill_name"]
                 logger.info(f"LLM router匹配到技能: {skill_name}")
 
-                # 2. 读取skill的workflow定义
+                # 获取技能名称和workflow文本
                 skill_md_path = f"{settings.SKILLS_DIR}/{skill_name}/SKILL.md"
                 try:
                     with open(skill_md_path, 'r', encoding='utf-8') as f:

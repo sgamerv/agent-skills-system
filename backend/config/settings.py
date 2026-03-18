@@ -3,8 +3,6 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Optional
-
 from pydantic_settings import BaseSettings
 
 
@@ -43,8 +41,15 @@ class Settings(BaseSettings):
     ZHIPUAI_TEMPERATURE: float = 0.7
     ZHIPUAI_MAX_TOKENS: int = 8000  # 增加到8000以支持更长的JSON响应
 
+    # vLLM配置
+    VLLM_BASE_URL: str = "http://localhost:8000/v1"
+    VLLM_MODEL: str = "Qwen/Qwen2.5-7B-Instruct"
+    VLLM_API_KEY: str = "EMPTY"
+    VLLM_TEMPERATURE: float = 0.7
+    VLLM_MAX_TOKENS: int = 4000
+
     # LLM 提供者配置
-    LLM_PROVIDER: str = "zhipuai"  # 可选: "xinference" 或 "zhipuai"
+    LLM_PROVIDER: str = "zhipuai"  # 可选: "xinference", "zhipuai", "vllm"
 
     # 数据库配置
     REDIS_URL: str = "redis://localhost:6379/0"

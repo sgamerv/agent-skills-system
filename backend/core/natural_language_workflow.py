@@ -6,13 +6,14 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from backend.llm.zhipuai_client import ZhipuAIClient
+from backend.llm.vllm_client import VLLMClient
 from backend.core.skill_orchestrator import SkillOrchestrator
 from backend.core.skill_manager import SkillRegistry
 
 logger = logging.getLogger(__name__)
 
 # LLM客户端类型
-LLMClientType = Union[ZhipuAIClient, Any]  # Any 用于兼容 LangChain ChatOpenAI
+LLMClientType = Union[ZhipuAIClient, VLLMClient, Any]  # Any 用于兼容 LangChain ChatOpenAI
 
 
 class StepStatus(Enum):
@@ -37,7 +38,7 @@ class WorkflowStep:
     user_prompt: str = ""
     status: StepStatus = StepStatus.PENDING
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "step_number": self.step_number,
             "description": self.description,
@@ -59,7 +60,7 @@ class WorkflowPlan:
     extracted_params: Dict[str, Any] = field(default_factory=dict)
     missing_params: List[str] = field(default_factory=list)
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "steps": [step.to_dict() for step in self.steps],
             "required_params": self.required_params,
@@ -410,6 +411,9 @@ class MCPToolExecutor:
                 status="failed",
                 error=f"MCP工具不存在: {tool_name}"
             )
+
+        if context is None:
+            context = {}
 
         client = self.mcp_clients[tool_name]
 
