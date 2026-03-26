@@ -103,6 +103,24 @@ class ZhipuAIClient:
 
         return await self.chat(messages, **kwargs)
 
+    async def invoke(self, prompt: str, **kwargs) -> str:
+        """
+        兼容LangChain的invoke方法
+        这个方法是为了与现有代码兼容，将字符串prompt转换为消息格式
+
+        Args:
+            prompt: 提示词字符串
+            **kwargs: 其他参数
+
+        Returns:
+            str: 模型回复
+        """
+        # 将字符串prompt转换为消息格式
+        # 假设传入的是完整的prompt字符串
+        messages = [{"role": "user", "content": prompt}]
+        
+        return await self.chat(messages, **kwargs)
+
     async def structured_output(
         self,
         messages: List[Dict],

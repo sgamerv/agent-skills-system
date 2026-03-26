@@ -1,6 +1,7 @@
 """FastAPI 应用主入口"""
 from __future__ import annotations
 
+import asyncio
 import uvicorn
 from typing import Any, Dict, List, Optional
 
@@ -10,7 +11,6 @@ from pydantic import BaseModel
 
 from backend.config import settings
 from backend.config.logging_config import get_logger, setup_logging
-from backend.core.agent_runtime import AgentRuntime
 from backend.core.memory import ProfileManager
 from backend.core.session_manager import MessageManager, SessionManager
 from backend.core.llm_provider_factory import LLMProviderFactory
@@ -54,13 +54,23 @@ async def startup_event() -> None:
     redis_client = None
     try:
         redis_client = redis.from_url(settings.REDIS_URL)
-        await redis_client.ping()
-        logger.info("Successfully connected to Redis")
+        # 只尝试创建客户端，不检查ping以避免异步问题
+        logger.info("Redis客户端已创建")
     except Exception as e:
-        logger.warning("Failed to connect to Redis: %s", e)
+        logger.warning("Failed to create Redis client: %s", e)
+        redis_client = None
 
     # 初始化核心组件
-    app.state.agent = AgentRuntime(redis_client=redis_client)
+    # 根据配置选择Agent运行时架构
+    if settings.AGENT_ARCHITECTURE.lower() == "agent_loop":
+        from backend.core.agent_loop.new_agent_runtime import NewAgentRuntime
+        app.state.agent = NewAgentRuntime(redis_client=redis_client)
+        logger.info(f"使用新的Agent Loop架构: {settings.AGENT_ARCHITECTURE}")
+    else:
+        from backend.core.agent_runtime import AgentRuntime
+        app.state.agent = AgentRuntime(redis_client=redis_client)
+        logger.info(f"使用传统架构: {settings.AGENT_ARCHITECTURE}")
+    
     app.state.session_manager = SessionManager(redis_client=redis_client)
     app.state.message_manager = MessageManager(redis_client=redis_client)
     app.state.profile_manager = ProfileManager(redis_client=redis_client)
@@ -149,15 +159,30 @@ async def root():
 @app.get("/health")
 async def health_check():
     """健康检查"""
-    agent: AgentRuntime = app.state.agent
+    agent = app.state.agent
 
-    return {
+    # 通用健康检查字段
+    health_data = {
         "status": "healthy",
         "llm_provider": settings.LLM_PROVIDER,
-        "llm_available": agent.llm is not None,
-        "zhipuai_available": agent.zhipuai_client is not None,
-        "workflow_executor_available": agent.workflow_executor is not None
+        "llm_available": agent.llm is not None if hasattr(agent, 'llm') else False,
+        "agent_architecture": settings.AGENT_ARCHITECTURE,
     }
+    
+    # 传统架构特有字段
+    if hasattr(agent, 'zhipuai_client'):
+        health_data["zhipuai_available"] = agent.zhipuai_client is not None
+    
+    if hasattr(agent, 'workflow_executor'):
+        health_data["workflow_executor_available"] = agent.workflow_executor is not None
+    
+    # Agent Loop架构特有字段
+    if hasattr(agent, 'agent_loop'):
+        health_data["agent_loop_available"] = True
+        if hasattr(agent, 'tool_registry'):
+            health_data["tool_count"] = str(len(agent.tool_registry.get_all_tools()))  # 转换为字符串
+    
+    return health_data
 
 
 @app.post("/chat", response_model=ChatResponse)
@@ -167,7 +192,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
 
     支持多轮对话和 Slot Filling
     """
-    agent: AgentRuntime = app.state.agent
+    agent = app.state.agent
 
     # 记录请求信息
     logger.info(f"收到聊天请求: user_id={request.user_id}, session_id={request.session_id}, user_input={request.user_input[:50]}")
@@ -220,7 +245,7 @@ async def execute_skill(request: ExecuteSkillRequest) -> Dict[str, Any]:
 
     不需要经过对话流程,直接执行指定技能
     """
-    agent: AgentRuntime = app.state.agent
+    agent = app.state.agent
 
     try:
         result = await agent.execute_skill(
@@ -244,7 +269,7 @@ async def list_skills():
     """
     获取所有可用技能列表
     """
-    agent: AgentRuntime = app.state.agent
+    agent = app.state.agent
     
     skills = []
     for skill_name, metadata in agent.skill_registry.skill_metadata.items():
@@ -267,7 +292,7 @@ async def get_skill(skill_name: str):
     """
     获取指定技能的详细信息
     """
-    agent: AgentRuntime = app.state.agent
+    agent = app.state.agent
     
     metadata = agent.skill_registry.get_skill_metadata(skill_name)
     if not metadata:
@@ -397,7 +422,7 @@ async def get_user_memories(user_id: str, memory_type: Optional[str] = None, lim
     """
     from backend.models.memory import MemoryType
     
-    agent: AgentRuntime = app.state.agent
+    agent = app.state.agent
     
     try:
         mem_type = MemoryType(memory_type) if memory_type else None

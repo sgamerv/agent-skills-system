@@ -1,0 +1,21 @@
+# 核心框架
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+
+# LangChain 核心
+langchain==0.3.14
+langchain-core==0.3.28
+langchain-openai==0.2.14
+
+# 必要工具库
+pydantic>=2.7.4,<3.0.0
+pydantic-settings>=2.1.0
+python-multipart==0.0.6
+python-dotenv==1.0.0
+
+# 异步支持
+httpx==0.26.0
+aiofiles==23.2.1
+
+# 配置管理
+pyyaml==6.0.1

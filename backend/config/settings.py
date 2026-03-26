@@ -73,6 +73,9 @@ class Settings(BaseSettings):
     # Skills 目录
     SKILLS_DIR: str = "./backend/skills"
 
+    # Agent架构选择
+    AGENT_ARCHITECTURE: str = "agent_loop"  # 可选: "legacy", "agent_loop"
+
     model_config = {
         "env_file": ".env",
         "case_sensitive": True,
